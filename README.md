@@ -30,7 +30,9 @@ pm2 save && pm2 startup
 3. Gán **100 page** + app cho system user (Full control).
 4. Generate token → chọn app → hết hạn: **Never** → quyền:
    `pages_show_list, pages_manage_posts, pages_read_engagement, read_insights, business_management`
-5. Dán token vào **Cài đặt → Facebook**, sang **Pages → Đồng bộ từ Facebook**.
+5. **Cài đặt → Tài khoản Facebook (BM) → Thêm BM**: đặt tên, dán token và Business ID, rồi sang **Pages → Đồng bộ từ Facebook**.
+
+Nhiều BM: lặp lại các bước trên cho từng BM (mỗi BM một app, System User và token riêng) rồi bấm **Thêm BM**. Page của BM nào đăng bằng token của BM đó.
 
 ### 2. Google Drive
 1. console.cloud.google.com → tạo project → bật **Google Drive API**.

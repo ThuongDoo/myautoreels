@@ -86,6 +86,32 @@ export function assignPageToUser(pageId, userId, token) {
   }, token);
 }
 
+// --- Page profile picture ---
+
+const IMAGE_MIME = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png' };
+
+// Uploads the image straight to /{page}/picture. Some Pages reject that, so on a non-permission,
+// non-rate-limit error we fall back to an unpublished photo and set that as the picture.
+export async function setPagePicture(pageId, token, filePath) {
+  const bytes = fs.readFileSync(filePath);
+  const name = filePath.split(/[\\/]/).pop();
+  const type = IMAGE_MIME[name.slice(name.lastIndexOf('.')).toLowerCase()] || 'image/jpeg';
+  const form = (extra = {}) => {
+    const f = new FormData();
+    f.append('access_token', token);
+    for (const [k, v] of Object.entries(extra)) f.append(k, v);
+    f.append('source', new Blob([bytes], { type }), name);
+    return f;
+  };
+  try {
+    return await request(new URL(`${graphBase()}/${pageId}/picture`), { method: 'POST', body: form() });
+  } catch (e) {
+    if ([4, 10, 17, 32, 190, 200, 283, 368, 613].includes(e.details?.code)) throw e;
+    const photo = await request(new URL(`${graphBase()}/${pageId}/photos`), { method: 'POST', body: form({ published: 'false' }) });
+    return graph('POST', `/${pageId}/picture`, { photo: photo.id }, token);
+  }
+}
+
 // --- Reels publishing: start -> upload binary -> finish (PUBLISHED) ---
 
 export function startReelUpload(pageId, token) {

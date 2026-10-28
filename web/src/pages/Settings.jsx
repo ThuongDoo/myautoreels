@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Alert, App, Button, Card, Col, Form, Input, InputNumber, Row, Space, Typography } from 'antd';
 import { api, useApi } from '../api.js';
+import AccountsCard from './Accounts.jsx';
 
 const NUMBER_KEYS = [
   'upload_concurrency', 'preupload_minutes', 'stats_interval_minutes', 'stats_days', 'viral_multiplier', 'viral_min_views',
@@ -46,25 +47,7 @@ export default function Settings() {
     <Form form={form} layout="vertical" onFinish={save} style={{ maxWidth: 1100 }}>
       <Row gutter={[16, 16]}>
         <Col xs={24} lg={12}>
-          <Card title="Facebook" style={{ height: '100%' }}>
-            <Form.Item
-              label="System User Token"
-              name="fb_token"
-              extra="Business Settings → System Users → Tạo token (không hết hạn) với quyền pages_show_list, pages_manage_posts, pages_read_engagement, read_insights, business_management."
-            >
-              <Input.Password placeholder="EAAG..." />
-            </Form.Item>
-            <Form.Item
-              label="Business ID"
-              name="business_id"
-              extra="Số trong URL của Business Settings: business.facebook.com/...?business_id=123456789"
-            >
-              <Input placeholder="123456789012345" />
-            </Form.Item>
-            <Form.Item label="Graph API version" name="graph_version">
-              <Input style={{ width: 120 }} />
-            </Form.Item>
-          </Card>
+          <AccountsCard />
         </Col>
 
         <Col xs={24} lg={12}>
@@ -96,6 +79,9 @@ export default function Settings() {
             </Form.Item>
             <Form.Item label="Upload trước giờ đăng (phút)" name="preupload_minutes" extra="Video được upload sẵn, đúng giờ mới gọi Facebook đăng.">
               <InputNumber min={1} max={120} />
+            </Form.Item>
+            <Form.Item label="Graph API version" name="graph_version" extra="Phiên bản API Facebook, chỉ đổi khi Facebook ngừng hỗ trợ bản đang dùng.">
+              <Input style={{ width: 120 }} />
             </Form.Item>
           </Card>
         </Col>

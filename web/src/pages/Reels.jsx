@@ -7,15 +7,27 @@ import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip as ChartTo
 import dayjs from 'dayjs';
 import { api, fmtNum, fmtSec, groupColor, useApi } from '../api.js';
 import ReelCharts from './ReelCharts.jsx';
+import VideoDrawer from './VideoDrawer.jsx';
 
 const viewsPerHour = (r) => r.views / Math.max(1, (Date.now() - r.published_at) / 3_600_000);
 
-function HistoryDrawer({ reel, onClose }) {
+function HistoryDrawer({ reel, onClose, onOpenVideo }) {
   const { data = [], loading } = useApi(`/reels/${reel.video_id}/history`);
   const points = data.map((d) => ({ ...d, time: dayjs(d.ts).format('DD/MM HH:mm') }));
   return (
     <Drawer open width={640} onClose={onClose} title={reel.page_name}>
       <Typography.Paragraph ellipsis={{ rows: 3, expandable: true }}>{reel.caption}</Typography.Paragraph>
+      <Typography.Paragraph>
+        Video gốc:{' '}
+        {reel.drive_file_id ? (
+          <>
+            <Typography.Text strong>{reel.drive_file_name}</Typography.Text>{' '}
+            <Button size="small" onClick={() => onOpenVideo({ id: reel.drive_file_id, name: reel.drive_file_name })}>
+              Xem video &amp; {reel.source_posts} lần đăng
+            </Button>
+          </>
+        ) : <Typography.Text type="secondary">không rõ (reel đăng ngoài app)</Typography.Text>}
+      </Typography.Paragraph>
       <Space wrap size="large" style={{ marginBottom: 16 }}>
         <Statistic title="Views" value={reel.views} />
         <Statistic title="Like" value={reel.likes} />
@@ -50,6 +62,7 @@ export default function Reels() {
   const [viralOnly, setViralOnly] = useState(false);
   const [q, setQ] = useState('');
   const [open, setOpen] = useState(null);
+  const [openVideo, setOpenVideo] = useState(null);
 
   const { data: pages = [] } = useApi('/pages');
   const { data: groups = [] } = useApi('/groups');
@@ -172,6 +185,18 @@ export default function Reels() {
             },
             { title: 'Page', dataIndex: 'page_name', width: 160, ellipsis: true },
             {
+              title: 'Video gốc',
+              dataIndex: 'drive_file_name',
+              width: 190,
+              ellipsis: true,
+              render: (n, r) => (r.drive_file_id ? (
+                <Space size={4}>
+                  <a onClick={(e) => { e.stopPropagation(); setOpenVideo({ id: r.drive_file_id, name: n }); }}>{n}</a>
+                  {r.source_posts > 1 && <Tag style={{ margin: 0 }}>x{r.source_posts}</Tag>}
+                </Space>
+              ) : <Typography.Text type="secondary">—</Typography.Text>),
+            },
+            {
               title: 'Đăng',
               dataIndex: 'published_at',
               width: 120,
@@ -203,7 +228,8 @@ export default function Reels() {
         />
         )}
       </Card>
-      {open && <HistoryDrawer reel={open} onClose={() => setOpen(null)} />}
+      {open && <HistoryDrawer reel={open} onClose={() => setOpen(null)} onOpenVideo={setOpenVideo} />}
+      {openVideo && <VideoDrawer video={openVideo} onClose={() => setOpenVideo(null)} />}
     </Space>
   );
 }

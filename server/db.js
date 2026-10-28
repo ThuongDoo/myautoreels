@@ -82,11 +82,34 @@ db.exec(`
   );
   INSERT OR IGNORE INTO page_groups (name, created_at)
     SELECT DISTINCT group_name, 0 FROM pages WHERE group_name IS NOT NULL;
+
+  -- One row per Business Manager: its System User token and Business ID.
+  CREATE TABLE IF NOT EXISTS fb_accounts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    token TEXT NOT NULL,
+    business_id TEXT,
+    created_at INTEGER
+  );
 `);
 
+if (!db.prepare('PRAGMA table_info(pages)').all().some((c) => c.name === 'account_id')) {
+  db.exec('ALTER TABLE pages ADD COLUMN account_id INTEGER');
+}
+
+// One-time move of the old single-account settings (fb_token / business_id) into fb_accounts.
+{
+  const legacyToken = db.prepare("SELECT value FROM settings WHERE key = 'fb_token'").get()?.value;
+  if (legacyToken && !db.prepare('SELECT 1 FROM fb_accounts').get()) {
+    const businessId = db.prepare("SELECT value FROM settings WHERE key = 'business_id'").get()?.value || null;
+    const { lastInsertRowid } = db.prepare('INSERT INTO fb_accounts (name, token, business_id, created_at) VALUES (?, ?, ?, ?)')
+      .run('BM 1', legacyToken, businessId, Date.now());
+    db.prepare('UPDATE pages SET account_id = ? WHERE account_id IS NULL').run(lastInsertRowid);
+  }
+  db.exec("DELETE FROM settings WHERE key IN ('fb_token', 'business_id')");
+}
+
 const DEFAULTS = {
-  fb_token: '',
-  business_id: '',
   graph_version: 'v23.0',
   google_sa_json: '',
   drive_folder_id: '',

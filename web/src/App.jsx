@@ -1,16 +1,18 @@
 import { useEffect, useState } from 'react';
 import { Layout, Menu } from 'antd';
-import { CalendarOutlined, FireOutlined, FlagOutlined, SettingOutlined, UnorderedListOutlined } from '@ant-design/icons';
+import { CalendarOutlined, FireOutlined, FlagOutlined, PlaySquareOutlined, SettingOutlined, UnorderedListOutlined } from '@ant-design/icons';
 import Reels from './pages/Reels.jsx';
 import Schedule from './pages/Schedule.jsx';
 import Queue from './pages/Queue.jsx';
 import Pages from './pages/Pages.jsx';
+import Videos from './pages/Videos.jsx';
 import Settings from './pages/Settings.jsx';
 
 const MENU = [
   { key: 'reels', icon: <FireOutlined />, label: 'Thống kê Reels', Component: Reels },
   { key: 'schedule', icon: <CalendarOutlined />, label: 'Lên lịch', Component: Schedule },
   { key: 'queue', icon: <UnorderedListOutlined />, label: 'Hàng đợi', Component: Queue },
+  { key: 'videos', icon: <PlaySquareOutlined />, label: 'Kho video', Component: Videos },
   { key: 'pages', icon: <FlagOutlined />, label: 'Pages', Component: Pages },
   { key: 'settings', icon: <SettingOutlined />, label: 'Cài đặt', Component: Settings },
 ];

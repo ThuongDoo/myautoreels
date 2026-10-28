@@ -1,6 +1,10 @@
-import { db, getAllSettings, getSetting, setSetting, SETTING_KEYS, transaction } from './db.js';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import { createTask, runTask } from './tasks.js';
+import { DATA_DIR, db, getAllSettings, getSetting, setSetting, SETTING_KEYS, transaction } from './db.js';
 import * as fb from './fb.js';
-import { listFolder, listVideosRecursive, parseFolderId, serviceAccountEmail } from './drive.js';
+import { listFolder, listVideosRecursive, parseFolderId, serviceAccountEmail, streamFile } from './drive.js';
 import { refreshStats, isStatsRunning } from './stats.js';
 import { notify } from './telegram.js';
 import { renderCaption } from './caption.js';
@@ -47,55 +51,121 @@ export function registerRoutes(app) {
   });
 
   // --- Pages ---
-  app.get('/api/pages', async () =>
-    db.prepare('SELECT id, name, picture, enabled, group_name, synced_at FROM pages ORDER BY name').all());
+  app.get('/api/pages', async () => db.prepare(`
+    SELECT p.id, p.name, p.picture, p.enabled, p.group_name, p.synced_at, p.account_id, a.name AS account_name
+    FROM pages p LEFT JOIN fb_accounts a ON a.id = p.account_id
+    ORDER BY p.name
+  `).all());
 
-  const fbToken = () => {
-    const token = getSetting('fb_token');
-    if (!token) throw bad('Chưa nhập System User Token trong Cài đặt');
-    return token;
+  // --- Facebook accounts (one per Business Manager) ---
+  const getAccount = (id) => {
+    if (id == null || id === '') throw bad('Chưa chọn tài khoản BM');
+    const account = db.prepare('SELECT * FROM fb_accounts WHERE id = ?').get(Number(id));
+    if (!account) throw bad('Không tìm thấy tài khoản BM', 404);
+    return account;
   };
+  const maskToken = (t) => (t ? `${t.slice(0, 6)}…${t.slice(-4)}` : '');
 
-  async function syncPages() {
-    const pages = await fb.listManagedPages(fbToken());
+  async function checkToken(token) {
+    try {
+      return await fb.getMe(token);
+    } catch (e) {
+      throw bad(`Token không dùng được: ${e.message}`);
+    }
+  }
+
+  app.get('/api/accounts', async () => db.prepare(`
+    SELECT a.id, a.name, a.business_id, a.token, a.created_at, COUNT(p.id) AS pages
+    FROM fb_accounts a LEFT JOIN pages p ON p.account_id = a.id
+    GROUP BY a.id ORDER BY a.id
+  `).all().map(({ token, ...a }) => ({ ...a, token_hint: maskToken(token) })));
+
+  app.post('/api/accounts', async (req) => {
+    const name = req.body?.name?.trim();
+    const token = req.body?.token?.trim();
+    const businessId = req.body?.business_id?.trim() || null;
+    if (!name) throw bad('Nhập tên gợi nhớ cho tài khoản');
+    if (!token) throw bad('Nhập System User Token');
+    const me = await checkToken(token);
+    const { lastInsertRowid } = db.prepare('INSERT INTO fb_accounts (name, token, business_id, created_at) VALUES (?, ?, ?, ?)')
+      .run(name, token, businessId, Date.now());
+    return { id: Number(lastInsertRowid), systemUser: me.name };
+  });
+
+  app.patch('/api/accounts/:id', async (req) => {
+    const account = getAccount(req.params.id);
+    const name = req.body?.name?.trim() || account.name;
+    const businessId = req.body?.business_id !== undefined ? (req.body.business_id?.trim() || null) : account.business_id;
+    const newToken = req.body?.token?.trim();
+    if (newToken) await checkToken(newToken);
+    db.prepare('UPDATE fb_accounts SET name = ?, business_id = ?, token = ? WHERE id = ?')
+      .run(name, businessId, newToken || account.token, account.id);
+    // Page tokens are derived from the System User token, so a new token needs a resync to take effect.
+    if (newToken) return { ok: true, synced: (await syncAccount(getAccount(account.id))).length };
+    return { ok: true };
+  });
+
+  // Removes the account and its pages; their unpublished jobs are canceled. Reel stats are kept.
+  app.delete('/api/accounts/:id', async (req) => {
+    const account = getAccount(req.params.id);
+    let pages = 0;
+    let jobs = 0;
+    transaction(() => {
+      jobs = Number(db.prepare(`
+        UPDATE jobs SET status = 'canceled', updated_at = ?
+        WHERE status IN ('pending', 'uploaded', 'failed') AND page_id IN (SELECT id FROM pages WHERE account_id = ?)
+      `).run(Date.now(), account.id).changes);
+      pages = Number(db.prepare('DELETE FROM pages WHERE account_id = ?').run(account.id).changes);
+      db.prepare('DELETE FROM fb_accounts WHERE id = ?').run(account.id);
+    });
+    return { pages, jobs };
+  });
+
+  app.post('/api/accounts/:id/test', async (req) => {
+    const account = getAccount(req.params.id);
+    const me = await checkToken(account.token);
+    const pages = await fb.listManagedPages(account.token);
+    return { systemUser: me.name, pages: pages.length };
+  });
+
+  async function syncAccount(account) {
+    const pages = await fb.listManagedPages(account.token);
     const stmt = db.prepare(`
-      INSERT INTO pages (id, name, access_token, picture, synced_at) VALUES (?, ?, ?, ?, ?)
+      INSERT INTO pages (id, name, access_token, picture, synced_at, account_id) VALUES (?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET name = excluded.name, access_token = excluded.access_token,
-        picture = excluded.picture, synced_at = excluded.synced_at
+        picture = excluded.picture, synced_at = excluded.synced_at, account_id = excluded.account_id
     `);
     const now = Date.now();
     transaction(() => {
-      for (const p of pages) stmt.run(p.id, p.name, p.access_token, p.picture?.data?.url ?? null, now);
+      for (const p of pages) stmt.run(p.id, p.name, p.access_token, p.picture?.data?.url ?? null, now, account.id);
     });
     return pages;
   }
 
-  app.post('/api/pages/sync', async () => ({ synced: (await syncPages()).length }));
+  // Syncs every account; one failing account doesn't stop the others.
+  app.post('/api/pages/sync', async () => {
+    const accounts = db.prepare('SELECT * FROM fb_accounts ORDER BY id').all();
+    if (!accounts.length) throw bad('Chưa thêm tài khoản BM nào (Cài đặt → Tài khoản Facebook)');
+    const results = [];
+    for (const account of accounts) {
+      try {
+        results.push({ account: account.name, synced: (await syncAccount(account)).length });
+      } catch (e) {
+        results.push({ account: account.name, error: e.message });
+      }
+    }
+    return { synced: results.reduce((s, r) => s + (r.synced || 0), 0), results };
+  });
 
   // Assigns every page of the BM to the system user via API (the BM UI fails on bulk assigns).
   // Runs in the background; the UI polls /status to show progress.
   let assignTask = null;
-
   const ASSIGN_DELAY_MS = 4_000;
-  // Wait times (minutes) after Facebook's anti-spam block (code 368); gives up after the last one.
-  const RATE_LIMIT_BACKOFF_MIN = [5, 10, 20, 30, 30, 60];
-  const isRateLimited = (e) => e.details?.code === 368 || e.details?.error_subcode === 1390008;
 
-  class Canceled extends Error {}
-
-  async function runAssignAll(task, token, businessId) {
-    const log = (text, type = 'info') => {
-      task.log.push({ ts: Date.now(), text, type });
-      task.updatedAt = Date.now();
-    };
-    const sleep = async (ms) => {
-      const until = Date.now() + ms;
-      while (Date.now() < until) {
-        if (task.cancel) throw new Canceled();
-        await new Promise((r) => setTimeout(r, Math.min(1000, until - Date.now())));
-      }
-    };
-    try {
+  function startAssignAll(account) {
+    const { token, business_id: businessId } = account;
+    const task = createTask({ account: account.name, total: 0, alreadyAssigned: 0, newlyAssigned: 0, synced: null });
+    return runTask(task, async ({ log, sleep, retryOnBlock, failItem }) => {
       task.phase = 'Lấy thông tin System User';
       const me = await fb.getMe(token);
       log(`System User: ${me.name} (${me.id})`);
@@ -110,34 +180,15 @@ export function registerRoutes(app) {
       Object.assign(task, { total: all.length, alreadyAssigned: assigned.size, todo: todo.length });
       log(`Đã gán sẵn ${assigned.size}, cần gán thêm ${todo.length}`);
 
-      let blocks = 0;
+      task.phase = 'Đang gán page';
       for (const page of todo) {
         task.current = page.name;
-        for (;;) {
-          if (task.cancel) throw new Canceled();
-          task.phase = 'Đang gán page';
-          try {
-            await fb.assignPageToUser(page.id, me.id, token);
-            task.newlyAssigned++;
-            blocks = 0;
-            log(`✓ ${page.name}`, 'success');
-          } catch (e) {
-            if (isRateLimited(e)) {
-              if (blocks >= RATE_LIMIT_BACKOFF_MIN.length) {
-                throw new Error('Facebook chặn quá nhiều lần liên tiếp. Hãy đợi vài giờ (tốt nhất là ngày mai) rồi bấm gán lại — page đã gán sẽ được bỏ qua.');
-              }
-              const minutes = RATE_LIMIT_BACKOFF_MIN[blocks++];
-              task.waitUntil = Date.now() + minutes * 60_000;
-              task.phase = 'Facebook tạm chặn, đang chờ';
-              log(`⏸ Facebook tạm chặn vì thao tác nhanh (368). Chờ ${minutes} phút rồi thử lại "${page.name}"`, 'warning');
-              await sleep(minutes * 60_000);
-              task.waitUntil = null;
-              continue;
-            }
-            task.failed.push({ id: page.id, name: page.name, source: page.source, error: e.message });
-            log(`✗ ${page.name}: ${e.message}`, 'error');
-          }
-          break;
+        try {
+          await retryOnBlock(page.name, () => fb.assignPageToUser(page.id, me.id, token));
+          task.newlyAssigned++;
+          log(`✓ ${page.name}`, 'success');
+        } catch (e) {
+          failItem({ id: page.id, name: page.name, source: page.source }, e);
         }
         task.done++;
         await sleep(ASSIGN_DELAY_MS);
@@ -145,24 +196,9 @@ export function registerRoutes(app) {
       task.current = null;
 
       task.phase = 'Đồng bộ lại danh sách page';
-      task.synced = (await syncPages()).length;
+      task.synced = (await syncAccount(account)).length;
       log(`Hoàn tất: app hiện có ${task.synced} page`, 'success');
-      task.phase = 'Hoàn tất';
-    } catch (e) {
-      if (e instanceof Canceled) {
-        task.phase = 'Đã dừng';
-        log('Đã dừng theo yêu cầu. Bấm gán lại để tiếp tục — page đã gán sẽ được bỏ qua.', 'warning');
-      } else {
-        task.error = e.message;
-        task.phase = 'Lỗi';
-        log(`Dừng vì lỗi: ${e.message}`, 'error');
-      }
-    } finally {
-      task.running = false;
-      task.waitUntil = null;
-      task.current = null;
-      task.finishedAt = Date.now();
-    }
+    }, { canceledText: 'Đã dừng theo yêu cầu. Bấm gán lại để tiếp tục — page đã gán sẽ được bỏ qua.' });
   }
 
   app.post('/api/pages/assign-all/cancel', async () => {
@@ -170,22 +206,103 @@ export function registerRoutes(app) {
     return { ok: true };
   });
 
-  app.post('/api/pages/assign-all', async () => {
+  app.post('/api/pages/assign-all', async (req) => {
     if (assignTask?.running) return assignTask;
-    const token = fbToken();
-    const businessId = getSetting('business_id');
-    if (!businessId) throw bad('Chưa nhập Business ID trong Cài đặt');
-
-    assignTask = {
-      running: true, phase: 'Bắt đầu', startedAt: Date.now(), updatedAt: Date.now(), finishedAt: null,
-      total: 0, alreadyAssigned: 0, todo: 0, done: 0, newlyAssigned: 0, synced: null,
-      current: null, failed: [], log: [], error: null, waitUntil: null, cancel: false,
-    };
-    runAssignAll(assignTask, token, businessId);
+    const account = getAccount(req.body?.accountId);
+    if (!account.business_id) throw bad(`Tài khoản "${account.name}" chưa có Business ID (Cài đặt → Tài khoản Facebook)`);
+    assignTask = startAssignAll(account);
     return assignTask;
   });
 
   app.get('/api/pages/assign-all/status', async () => assignTask || { running: false, idle: true });
+
+  // --- Bulk avatar change ---
+  // The browser uploads each image once (raw body), then starts a task with page -> image pairs.
+  const AVATAR_DIR = path.join(DATA_DIR, 'avatars');
+  const AVATAR_TYPES = { 'image/jpeg': '.jpg', 'image/png': '.png' };
+  fs.mkdirSync(AVATAR_DIR, { recursive: true });
+
+  app.addContentTypeParser(/^image\//, { parseAs: 'buffer', bodyLimit: 15 * 1024 * 1024 }, (req, body, done) => done(null, body));
+
+  app.post('/api/avatars/upload', async (req) => {
+    const type = req.headers['content-type'];
+    if (!AVATAR_TYPES[type]) throw bad('Chỉ hỗ trợ ảnh JPG hoặc PNG');
+    if (!Buffer.isBuffer(req.body) || !req.body.length) throw bad('Ảnh rỗng');
+    // Drop leftovers from runs that never started.
+    const dayAgo = Date.now() - 86_400_000;
+    for (const f of fs.readdirSync(AVATAR_DIR)) {
+      const p = path.join(AVATAR_DIR, f);
+      if (fs.statSync(p).mtimeMs < dayAgo) fs.rmSync(p, { force: true });
+    }
+    const id = `${crypto.randomUUID()}${AVATAR_TYPES[type]}`;
+    fs.writeFileSync(path.join(AVATAR_DIR, id), req.body);
+    return { id };
+  });
+
+  let avatarTask = null;
+
+  function startAvatarChange(items, minSec, maxSec) {
+    const task = createTask({ todo: items.length, changed: 0, test: items.length === 1 });
+    return runTask(task, async ({ log, sleep, retryOnBlock, failItem }) => {
+      log(`Đổi avatar cho ${items.length} page, mỗi page cách nhau ngẫu nhiên ${minSec}–${maxSec} giây`);
+      task.phase = 'Đang đổi avatar';
+      try {
+        for (const { page, image, fileName } of items) {
+          task.current = page.name;
+          try {
+            await retryOnBlock(page.name, () => fb.setPagePicture(page.id, page.access_token, path.join(AVATAR_DIR, image)));
+            task.changed++;
+            log(`✓ ${page.name} ← ${fileName}`, 'success');
+          } catch (e) {
+            const hint = [10, 200, 283].includes(e.details?.code)
+              ? ' → Tạo lại System User token có tick quyền pages_manage_metadata, dán vào Cài đặt → Sửa BM (app tự đồng bộ lại page).'
+              : '';
+            failItem({ id: page.id, name: page.name }, new Error(e.message + hint));
+          }
+          task.done++;
+          if (task.done < items.length) {
+            const wait = minSec + Math.random() * (maxSec - minSec);
+            task.nextAt = Date.now() + wait * 1000;
+            await sleep(wait * 1000);
+            task.nextAt = null;
+          }
+        }
+        task.current = null;
+
+        task.phase = 'Cập nhật avatar trong app';
+        const accountIds = [...new Set(items.map((i) => i.page.account_id).filter(Boolean))];
+        for (const id of accountIds) await syncAccount(getAccount(id));
+        log(`Hoàn tất: đổi được ${task.changed}/${items.length} page`, 'success');
+      } finally {
+        for (const image of new Set(items.map((i) => i.image))) fs.rmSync(path.join(AVATAR_DIR, image), { force: true });
+      }
+    }, { canceledText: 'Đã dừng theo yêu cầu. Các page chưa đổi vẫn giữ avatar cũ.' });
+  }
+
+  app.post('/api/avatars/run', async (req) => {
+    if (avatarTask?.running) throw bad('Đang có một lượt đổi avatar chạy, chờ xong hoặc bấm Dừng');
+    const { items = [], delayMinSec = 10, delayMaxSec = 30 } = req.body || {};
+    if (!items.length) throw bad('Chưa chọn page');
+    const resolved = items.map(({ pageId, imageId, fileName }) => {
+      const page = db.prepare('SELECT * FROM pages WHERE id = ?').get(pageId);
+      if (!page) throw bad(`Không tìm thấy page ${pageId}`);
+      if (!/^[\w-]+\.(jpg|png)$/.test(imageId) || !fs.existsSync(path.join(AVATAR_DIR, imageId))) {
+        throw bad('Ảnh đã hết hạn, hãy chọn lại thư mục ảnh');
+      }
+      return { page, image: imageId, fileName: fileName || imageId };
+    });
+    const lo = Math.max(3, Number(delayMinSec) || 10);
+    const hi = Math.max(lo, Number(delayMaxSec) || lo);
+    avatarTask = startAvatarChange(resolved, lo, hi);
+    return avatarTask;
+  });
+
+  app.post('/api/avatars/cancel', async () => {
+    if (avatarTask?.running) avatarTask.cancel = true;
+    return { ok: true };
+  });
+
+  app.get('/api/avatars/status', async () => avatarTask || { running: false, idle: true });
 
   // --- Page groups ---
   app.get('/api/groups', async () => db.prepare(`
@@ -232,14 +349,66 @@ export function registerRoutes(app) {
   app.get('/api/drive/list', async (req) => {
     const folderId = parseFolderId(req.query.folderId || getSetting('drive_folder_id'));
     if (!folderId) throw bad('Chưa nhập thư mục Google Drive (Cài đặt → Google Drive)');
-    return { folderId, ...(await listFolder(folderId)) };
+    const { folders, videos } = await listFolder(folderId);
+    return { folderId, folders, videos: withUsage(videos) };
   });
 
   app.get('/api/drive/folder-videos', async (req) => {
     const folderId = parseFolderId(req.query.folderId);
     if (!folderId) throw bad('Thiếu folderId');
-    return { videos: await listVideosRecursive(folderId, req.query.name || '') };
+    return { videos: withUsage(await listVideosRecursive(folderId, req.query.name || '')) };
   });
+
+  app.get('/api/drive/stream/:fileId', async (req, reply) => {
+    const file = await streamFile(req.params.fileId, req.headers.range);
+    reply.code(file.status === 206 ? 206 : 200);
+    for (const [k, v] of Object.entries(file.headers)) if (v) reply.header(k, v);
+    reply.header('accept-ranges', 'bytes').header('cache-control', 'private, max-age=3600');
+    return reply.send(file.body);
+  });
+
+  // --- Source videos: how each Drive file has been used across pages ---
+  const ACTIVE = `('pending', 'uploading', 'uploaded', 'publishing', 'processing')`;
+
+  // Adds { posted, upcoming } to each Drive video so the picker can warn about reuse.
+  function withUsage(videos) {
+    if (!videos.length) return videos;
+    const rows = db.prepare(`
+      SELECT drive_file_id AS id, SUM(status = 'done') AS posted, SUM(status IN ${ACTIVE}) AS upcoming
+      FROM jobs WHERE drive_file_id IN (${videos.map(() => '?').join(',')}) GROUP BY drive_file_id
+    `).all(...videos.map((v) => v.id));
+    const usage = new Map(rows.map((r) => [r.id, r]));
+    return videos.map((v) => ({ ...v, posted: usage.get(v.id)?.posted || 0, upcoming: usage.get(v.id)?.upcoming || 0 }));
+  }
+
+  app.get('/api/videos', async () => db.prepare(`
+    SELECT j.drive_file_id AS id, MAX(j.drive_file_name) AS name,
+           SUM(j.status = 'done') AS posted,
+           SUM(j.status IN ${ACTIVE}) AS upcoming,
+           SUM(j.status = 'failed') AS failed,
+           COUNT(DISTINCT CASE WHEN j.status = 'done' THEN j.page_id END) AS pages,
+           MIN(CASE WHEN j.status = 'done' THEN j.published_at END) AS first_posted,
+           MAX(j.published_at) AS last_posted,
+           COALESCE(SUM(r.views), 0) AS views,
+           COALESCE(SUM(r.likes + r.comments + r.shares), 0) AS interactions,
+           COALESCE(MAX(r.views), 0) AS best_views,
+           COALESCE(SUM(r.viral), 0) AS viral
+    FROM jobs j LEFT JOIN reels r ON r.job_id = j.id
+    WHERE j.status != 'canceled'
+    GROUP BY j.drive_file_id
+    ORDER BY views DESC, last_posted DESC
+  `).all());
+
+  app.get('/api/videos/:fileId/posts', async (req) => db.prepare(`
+    SELECT j.id AS job_id, j.page_id, p.name AS page_name, p.group_name, j.status, j.scheduled_at, j.published_at,
+           j.video_id, j.error, j.caption,
+           r.views, r.likes, r.comments, r.shares, r.viral, r.viral_score, r.permalink
+    FROM jobs j
+    LEFT JOIN pages p ON p.id = j.page_id
+    LEFT JOIN reels r ON r.job_id = j.id
+    WHERE j.drive_file_id = ? AND j.status != 'canceled'
+    ORDER BY COALESCE(j.published_at, j.scheduled_at) DESC
+  `).all(req.params.fileId));
 
   // --- Jobs ---
   app.get('/api/jobs', async (req) => {
@@ -357,7 +526,12 @@ export function registerRoutes(app) {
     args.unshift(since);
     if (req.query.viral === '1') where.push('r.viral = 1');
     return db.prepare(`
-      SELECT r.*, p.name AS page_name, p.group_name FROM reels r LEFT JOIN pages p ON p.id = r.page_id
+      SELECT r.*, p.name AS page_name, p.group_name,
+             j.drive_file_id, j.drive_file_name,
+             (SELECT COUNT(*) FROM jobs j2 WHERE j2.drive_file_id = j.drive_file_id AND j2.status = 'done') AS source_posts
+      FROM reels r
+      LEFT JOIN pages p ON p.id = r.page_id
+      LEFT JOIN jobs j ON j.id = r.job_id
       WHERE ${where.join(' AND ')} ORDER BY r.views DESC LIMIT 3000
     `).all(...args);
   });

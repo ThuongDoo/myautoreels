@@ -1,12 +1,13 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
-  Alert, App, Avatar, Button, Card, Divider, Input, Modal, Popconfirm, Progress, Select, Space, Switch, Table, Tag, Typography,
+  App, Avatar, Button, Card, Divider, Dropdown, Input, Modal, Popconfirm, Select, Space, Switch, Table, Tag, Typography,
 } from 'antd';
-import { DeleteOutlined, EditOutlined, LoadingOutlined, PlusOutlined, SettingOutlined, SyncOutlined } from '@ant-design/icons';
+import { DeleteOutlined, DownOutlined, EditOutlined, PictureOutlined, PlusOutlined, SettingOutlined, SyncOutlined } from '@ant-design/icons';
 import { api, groupColor, useApi } from '../api.js';
+import AvatarBulkModal from './AvatarBulk.jsx';
+import TaskProgressModal, { LOG_COLORS } from './TaskProgress.jsx';
 
 const NO_GROUP = '__none__';
-const STALL_MS = 90_000;
 
 function NewGroupInput({ onCreated, buttonText = 'Tạo nhóm' }) {
   const { message } = App.useApp();
@@ -102,122 +103,15 @@ function GroupManagerModal({ groups, onClose, onChanged }) {
     </Modal>
   );
 }
-const LOG_COLORS = { success: '#2f9e44', error: '#e5484d', warning: '#d9480f', info: undefined };
-
-const elapsed = (from, to) => {
-  const s = Math.max(0, Math.round((to - from) / 1000));
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
-};
-
-function AssignProgressModal({ onClose }) {
-  const { data: task, reload } = useApi('/pages/assign-all/status');
-  const [now, setNow] = useState(Date.now());
-  const logEnd = useRef(null);
-
-  useEffect(() => {
-    const t = setInterval(() => {
-      setNow(Date.now());
-      reload({ silent: true });
-    }, 1000);
-    return () => clearInterval(t);
-  }, [reload]);
-
-  useEffect(() => { logEnd.current?.scrollIntoView({ block: 'nearest' }); }, [task?.log?.length]);
-
-  if (!task || task.idle) return null;
-
-  const running = task.running;
-  const waiting = running && task.waitUntil;
-  const stalled = running && !waiting && now - task.updatedAt > STALL_MS;
-  const stop = () => api.post('/pages/assign-all/cancel').then(() => reload({ silent: true }));
-  const percent = task.todo ? Math.round((task.done / task.todo) * 100) : (running ? 0 : 100);
-  let status = 'active';
-  if (task.error) status = 'exception';
-  else if (!running) status = task.failed.length ? 'normal' : 'success';
-
-  return (
-    <Modal
-      open
-      width={680}
-      title={(
-        <Space>
-          {running && <LoadingOutlined />}
-          Gán page cho System User
-        </Space>
-      )}
-      onCancel={onClose}
-      maskClosable={!running}
-      footer={(
-        <Space>
-          {running && (
-            <Popconfirm title="Dừng gán page?" description="Lần sau bấm gán lại sẽ chạy tiếp các page còn thiếu." onConfirm={stop}>
-              <Button danger disabled={task.cancel}>{task.cancel ? 'Đang dừng...' : 'Dừng'}</Button>
-            </Popconfirm>
-          )}
-          <Button type={running ? 'default' : 'primary'} onClick={onClose}>{running ? 'Ẩn (vẫn chạy nền)' : 'Đóng'}</Button>
-        </Space>
-      )}
-    >
-      <Space direction="vertical" style={{ width: '100%' }} size={12}>
-        <div>
-          <Typography.Text strong>{task.phase}</Typography.Text>
-          {task.current && <Typography.Text type="secondary"> — {task.current}</Typography.Text>}
-          <Typography.Text type="secondary" style={{ float: 'right' }}>
-            {elapsed(task.startedAt, task.finishedAt || now)}
-          </Typography.Text>
-        </div>
-
-        <Progress percent={percent} status={status} format={() => `${task.done}/${task.todo}`} />
-
-        <Space size="large" wrap>
-          <span>Tổng page BM: <b>{task.total}</b></span>
-          <span>Đã gán sẵn: <b>{task.alreadyAssigned}</b></span>
-          <span style={{ color: LOG_COLORS.success }}>Vừa gán: <b>{task.newlyAssigned}</b></span>
-          <span style={{ color: task.failed.length ? LOG_COLORS.error : undefined }}>Lỗi: <b>{task.failed.length}</b></span>
-          {task.synced != null && <span>App hiện có: <b>{task.synced}</b> page</span>}
-        </Space>
-
-        {waiting && (
-          <Alert
-            type="warning"
-            showIcon
-            message={`Facebook tạm chặn vì thao tác nhanh — tự thử lại sau ${elapsed(now, task.waitUntil)}`}
-            description={`Sẽ chạy tiếp lúc ${new Date(task.waitUntil).toLocaleTimeString('vi-VN')}. App vẫn đang hoạt động, không cần làm gì. Đừng gán page thủ công trên BM trong lúc này, sẽ bị chặn lâu hơn.`}
-          />
-        )}
-        {stalled && (
-          <Alert
-            type="warning"
-            showIcon
-            message={`Đã ${Math.round((now - task.updatedAt) / 1000)}s không có tiến triển`}
-            description="Facebook đang phản hồi chậm. Mỗi lần gọi tối đa 60s rồi sẽ tự báo lỗi và chạy tiếp, không cần làm gì."
-          />
-        )}
-        {task.error && <Alert type="error" showIcon message="Đã dừng vì lỗi" description={task.error} />}
-
-        <div
-          style={{
-            height: 260, overflowY: 'auto', background: '#fafafa', border: '1px solid #f0f0f0',
-            borderRadius: 8, padding: '8px 12px', fontFamily: 'Consolas, monospace', fontSize: 12,
-          }}
-        >
-          {task.log.map((l, i) => (
-            <div key={i} style={{ color: LOG_COLORS[l.type] }}>
-              <span style={{ color: '#999' }}>{new Date(l.ts).toLocaleTimeString('vi-VN')} </span>{l.text}
-            </div>
-          ))}
-          <div ref={logEnd} />
-        </div>
-      </Space>
-    </Modal>
-  );
-}
-
 export default function Pages() {
   const { message } = App.useApp();
   const { data = [], loading, reload } = useApi('/pages');
   const { data: groupList = [], reload: reloadGroups } = useApi('/groups');
+  const { data: accounts = [] } = useApi('/accounts');
+  const [accountFilter, setAccountFilter] = useState();
   const [showAssign, setShowAssign] = useState(false);
+  const [showAvatarPicker, setShowAvatarPicker] = useState(false);
+  const [showAvatarProgress, setShowAvatarProgress] = useState(false);
   const [selected, setSelected] = useState([]);
   const [q, setQ] = useState('');
   const [groupFilter, setGroupFilter] = useState('');
@@ -229,8 +123,12 @@ export default function Pages() {
     setSyncing(true);
     try {
       const r = await api.post('/pages/sync');
-      message.success(`Đã đồng bộ ${r.synced} page`);
+      const failed = r.results.filter((x) => x.error);
+      const ok = r.results.filter((x) => !x.error).map((x) => `${x.account}: ${x.synced}`).join(' · ');
+      if (ok) message.success(`Đã đồng bộ ${r.synced} page (${ok})`, 5);
+      for (const x of failed) message.error(`${x.account}: ${x.error}`, 8);
       reload();
+      reloadGroups({ silent: true });
     } catch (e) {
       message.error(e.message);
     } finally {
@@ -241,11 +139,12 @@ export default function Pages() {
   // Reopen the progress dialog if an assign task is still running (e.g. after a page reload).
   useEffect(() => {
     api.get('/pages/assign-all/status').then((t) => { if (t.running) setShowAssign(true); }).catch(() => {});
+    api.get('/avatars/status').then((t) => { if (t.running) setShowAvatarProgress(true); }).catch(() => {});
   }, []);
 
-  const assignAll = async () => {
+  const assignAll = async (accountId) => {
     try {
-      await api.post('/pages/assign-all');
+      await api.post('/pages/assign-all', { accountId });
       setShowAssign(true);
     } catch (e) {
       message.error(e.message);
@@ -280,6 +179,7 @@ export default function Pages() {
 
   const needle = q.toLowerCase();
   const rows = data.filter((p) => (!groupFilter || (p.group_name || NO_GROUP) === groupFilter)
+    && (!accountFilter || p.account_id === accountFilter)
     && (!needle
       || p.name.toLowerCase().includes(needle)
       || p.id.includes(needle)
@@ -290,18 +190,42 @@ export default function Pages() {
       title={`Pages (${data.filter((p) => p.enabled).length}/${data.length} đang bật)`}
       extra={(
         <Space>
-          <Popconfirm
-            title="Gán tất cả page của BM cho System User?"
-            description="Có thể mất 1–2 phút với 100 page."
-            onConfirm={assignAll}
-          >
-            <Button>Gán tất cả page của BM</Button>
-          </Popconfirm>
+          {accounts.length <= 1 ? (
+            <Popconfirm
+              title="Gán tất cả page của BM cho System User?"
+              description="Có thể mất 1–2 phút với 100 page."
+              disabled={!accounts.length}
+              onConfirm={() => assignAll(accounts[0]?.id)}
+            >
+              <Button disabled={!accounts.length}>Gán tất cả page của BM</Button>
+            </Popconfirm>
+          ) : (
+            <Dropdown
+              trigger={['click']}
+              menu={{
+                items: accounts.map((a) => ({ key: String(a.id), label: `${a.name} (${a.pages} page)` })),
+                onClick: ({ key }) => assignAll(Number(key)),
+              }}
+            >
+              <Button>Gán tất cả page của BM <DownOutlined /></Button>
+            </Dropdown>
+          )}
           <Button type="primary" icon={<SyncOutlined />} loading={syncing} onClick={sync}>Đồng bộ từ Facebook</Button>
         </Space>
       )}
     >
       <Space wrap size={[6, 8]} style={{ marginBottom: 12 }}>
+        {accounts.length > 1 && (
+          <Select
+            size="small"
+            allowClear
+            placeholder="Tất cả BM"
+            value={accountFilter}
+            onChange={setAccountFilter}
+            style={{ width: 170 }}
+            options={accounts.map((a) => ({ value: a.id, label: `${a.name} (${a.pages})` }))}
+          />
+        )}
         <Typography.Text type="secondary">Nhóm:</Typography.Text>
         <Tag.CheckableTag checked={!groupFilter} onChange={() => setGroupFilter('')}>Tất cả ({data.length})</Tag.CheckableTag>
         {groupList.map((g) => (
@@ -345,6 +269,7 @@ export default function Pages() {
               )}
             />
             <Button onClick={() => update(selected, { group_name: null }, `Đã bỏ ${selected.length} page khỏi nhóm`)}>Bỏ khỏi nhóm</Button>
+            <Button icon={<PictureOutlined />} onClick={() => setShowAvatarPicker(true)}>Đổi avatar</Button>
             <Button onClick={() => update(selected, { enabled: true })}>Bật</Button>
             <Button onClick={() => update(selected, { enabled: false })}>Tắt</Button>
             <Button type="link" onClick={() => setSelected([])}>Bỏ chọn</Button>
@@ -387,6 +312,13 @@ export default function Pages() {
               />
             ),
           },
+          ...(accounts.length > 1 ? [{
+            title: 'BM',
+            dataIndex: 'account_name',
+            width: 130,
+            sorter: (a, b) => (a.account_name || '').localeCompare(b.account_name || ''),
+            render: (n) => n || <Typography.Text type="secondary">—</Typography.Text>,
+          }] : []),
           {
             title: 'Bật',
             dataIndex: 'enabled',
@@ -395,7 +327,41 @@ export default function Pages() {
           },
         ]}
       />
-      {showAssign && <AssignProgressModal onClose={() => { setShowAssign(false); reload({ silent: true }); }} />}
+      {showAssign && (
+        <TaskProgressModal
+          statusUrl="/pages/assign-all/status"
+          cancelUrl="/pages/assign-all/cancel"
+          title={(t) => `Gán page cho System User${t.account ? ` — ${t.account}` : ''}`}
+          stopDescription="Lần sau bấm gán lại sẽ chạy tiếp các page còn thiếu."
+          stats={(t) => [
+            { label: 'Tổng page BM', value: t.total },
+            { label: 'Đã gán sẵn', value: t.alreadyAssigned },
+            { label: 'Vừa gán', value: t.newlyAssigned, color: LOG_COLORS.success },
+            t.synced != null && { label: 'App hiện có', value: `${t.synced} page` },
+          ]}
+          onClose={() => { setShowAssign(false); reload({ silent: true }); }}
+        />
+      )}
+      {showAvatarPicker && (
+        <AvatarBulkModal
+          pages={data.filter((p) => selected.includes(p.id))}
+          onClose={() => setShowAvatarPicker(false)}
+          onStarted={() => { setShowAvatarPicker(false); setShowAvatarProgress(true); }}
+        />
+      )}
+      {showAvatarProgress && (
+        <TaskProgressModal
+          statusUrl="/avatars/status"
+          cancelUrl="/avatars/cancel"
+          title={(t) => (t.test ? 'Đổi avatar — thử 1 page' : 'Đổi avatar hàng loạt')}
+          stopDescription="Các page chưa đổi sẽ giữ avatar cũ."
+          stats={(t) => [
+            { label: 'Tổng', value: `${t.todo} page` },
+            { label: 'Đã đổi', value: t.changed, color: LOG_COLORS.success },
+          ]}
+          onClose={() => { setShowAvatarProgress(false); reload({ silent: true }); }}
+        />
+      )}
       {showGroups && (
         <GroupManagerModal
           groups={groupList}

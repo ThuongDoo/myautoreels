@@ -5,17 +5,9 @@ import {
 import { DeleteOutlined, EditOutlined, RedoOutlined, SendOutlined, StopOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { api, useApi } from '../api.js';
+import { STATUS } from '../status.js';
+import VideoDrawer from './VideoDrawer.jsx';
 
-export const STATUS = {
-  pending: { label: 'Chờ', color: 'default' },
-  uploading: { label: 'Đang upload', color: 'processing' },
-  uploaded: { label: 'Đã upload, chờ giờ', color: 'cyan' },
-  publishing: { label: 'Đang đăng', color: 'processing' },
-  processing: { label: 'FB đang xử lý', color: 'geekblue' },
-  done: { label: 'Đã đăng', color: 'success' },
-  failed: { label: 'Lỗi', color: 'error' },
-  canceled: { label: 'Đã huỷ', color: 'default' },
-};
 const EDITABLE = ['pending', 'uploaded', 'failed', 'canceled'];
 
 function EditModal({ job, onClose, onSaved }) {
@@ -49,6 +41,7 @@ export default function Queue() {
   const [pageId, setPageId] = useState();
   const [selected, setSelected] = useState([]);
   const [editing, setEditing] = useState(null);
+  const [openVideo, setOpenVideo] = useState(null);
   const { data: pages = [] } = useApi('/pages');
 
   const query = new URLSearchParams({ ...(status && { status }), ...(pageId && { pageId }) }).toString();
@@ -122,7 +115,13 @@ export default function Queue() {
             ),
           },
           { title: 'Page', dataIndex: 'page_name', width: 180, ellipsis: true },
-          { title: 'Video', dataIndex: 'drive_file_name', width: 200, ellipsis: true },
+          {
+            title: 'Video',
+            dataIndex: 'drive_file_name',
+            width: 200,
+            ellipsis: true,
+            render: (n, j) => <a onClick={() => setOpenVideo({ id: j.drive_file_id, name: n })}>{n}</a>,
+          },
           {
             title: 'Caption',
             dataIndex: 'caption',
@@ -161,6 +160,7 @@ export default function Queue() {
           },
         ]}
       />
+      {openVideo && <VideoDrawer video={openVideo} onClose={() => setOpenVideo(null)} />}
       {editing && (
         <EditModal
           job={editing}

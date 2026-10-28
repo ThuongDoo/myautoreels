@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { drive as createDrive, auth } from '@googleapis/drive';
 import { db, getSetting, DATA_DIR } from './db.js';
@@ -8,6 +9,10 @@ const CACHE_DIR = path.join(DATA_DIR, 'cache');
 fs.mkdirSync(CACHE_DIR, { recursive: true });
 
 const FOLDER_MIME = 'application/vnd.google-apps.folder';
+
+// The Drive client returns a web ReadableStream for responseType 'stream'.
+const toNodeStream = (s) => (typeof s?.getReader === 'function' ? Readable.fromWeb(s) : s);
+const header = (res, name) => (typeof res.headers?.get === 'function' ? res.headers.get(name) : res.headers?.[name]);
 
 let cached = { key: null, client: null };
 
@@ -102,9 +107,28 @@ async function download(fileId) {
 
   const tmp = `${dest}.part`;
   const res = await d.files.get({ fileId, alt: 'media', supportsAllDrives: true }, { responseType: 'stream' });
-  await pipeline(res.data, fs.createWriteStream(tmp));
+  await pipeline(toNodeStream(res.data), fs.createWriteStream(tmp));
   fs.renameSync(tmp, dest);
   return { path: dest, size: fs.statSync(dest).size };
+}
+
+// Streams a Drive video to the browser, passing Range through so the player can seek.
+export async function streamFile(fileId, range) {
+  const d = client();
+  const { data: meta } = await d.files.get({ fileId, fields: 'mimeType', supportsAllDrives: true });
+  const res = await d.files.get(
+    { fileId, alt: 'media', supportsAllDrives: true },
+    { responseType: 'stream', headers: range ? { Range: range } : {} },
+  );
+  return {
+    status: res.status,
+    headers: {
+      'content-type': header(res, 'content-type') || meta.mimeType || 'video/mp4',
+      'content-length': header(res, 'content-length'),
+      'content-range': header(res, 'content-range'),
+    },
+    body: toNodeStream(res.data),
+  };
 }
 
 // Delete the cached file once no job needs it within the next hour.

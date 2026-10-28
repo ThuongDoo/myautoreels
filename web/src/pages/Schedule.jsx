@@ -235,6 +235,8 @@ function DriveBrowser({ selectedKeys, onSelect, videoCache, folderNames, folders
                 {r.isFolder ? <FolderOutlined style={{ color: '#f5a623' }} /> : <VideoCameraOutlined />}
                 {name}
                 {r.isFolder && <RightOutlined style={{ fontSize: 10, color: '#999' }} />}
+                {r.posted > 0 && <Tag color="green" style={{ margin: 0 }}>Đã đăng {r.posted}</Tag>}
+                {r.upcoming > 0 && <Tag color="blue" style={{ margin: 0 }}>Sắp đăng {r.upcoming}</Tag>}
               </Space>
             ),
           },
