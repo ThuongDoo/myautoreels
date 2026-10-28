@@ -1,0 +1,22 @@
+{
+  "name": "myautoreels",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -n server,web -c blue,green \"npm:dev:server\" \"npm:dev:web\"",
+    "dev:server": "node --watch-path=server --disable-warning=ExperimentalWarning server/index.js",
+    "dev:web": "npm --prefix web run dev",
+    "build": "npm --prefix web run build",
+    "start": "node --disable-warning=ExperimentalWarning server/index.js",
+    "postinstall": "npm --prefix web install"
+  },
+  "dependencies": {
+    "@fastify/static": "^10.1.8",
+    "@googleapis/drive": "^27.0.0",
+    "fastify": "^5.12.7"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.6"
+  }
+}

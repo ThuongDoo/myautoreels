@@ -1,0 +1,17 @@
+node_modules/
+web/node_modules/
+web/dist/
+data/
+.env
+.env.*
+!.env.example
+
+# Database và file key — không bao giờ commit
+*.db
+*.db-wal
+*.db-shm
+*service*account*.json
+*credentials*.json
+*-key.json
+keys/
+secrets/
