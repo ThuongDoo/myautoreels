@@ -428,6 +428,18 @@ export function registerRoutes(app) {
     return { rows, counts };
   });
 
+  // Lightweight job list for the page × day calendar; the browser buckets by day in its own timezone.
+  app.get('/api/jobs/calendar', async (req) => {
+    const from = Number(req.query.from);
+    const to = Number(req.query.to);
+    if (!from || !to || to <= from) throw bad('Khoảng ngày không hợp lệ');
+    return db.prepare(`
+      SELECT id, page_id, scheduled_at, status, drive_file_name FROM jobs
+      WHERE scheduled_at >= ? AND scheduled_at < ? AND status != 'canceled'
+      ORDER BY scheduled_at
+    `).all(from, to);
+  });
+
   // slotTimes: posting times (ms) computed by the browser in the user's timezone — either
   // fixed daily slots (7h, 11h, 20h...) or evenly spaced. Each page posts one video per slot;
   // within a slot pages go one after another with a random gap of gapMinSec..gapMaxSec.
