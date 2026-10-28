@@ -2,10 +2,11 @@ import { useState } from 'react';
 import {
   App, Button, Card, Col, Drawer, Empty, Input, Row, Segmented, Select, Space, Statistic, Switch, Table, Tag, Typography,
 } from 'antd';
-import { FireOutlined, ReloadOutlined } from '@ant-design/icons';
+import { BarChartOutlined, FireOutlined, ReloadOutlined, UnorderedListOutlined } from '@ant-design/icons';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip as ChartTooltip, XAxis, YAxis } from 'recharts';
 import dayjs from 'dayjs';
-import { api, fmtNum, fmtSec, useApi } from '../api.js';
+import { api, fmtNum, fmtSec, groupColor, useApi } from '../api.js';
+import ReelCharts from './ReelCharts.jsx';
 
 const viewsPerHour = (r) => r.views / Math.max(1, (Date.now() - r.published_at) / 3_600_000);
 
@@ -44,13 +45,16 @@ export default function Reels() {
   const { message } = App.useApp();
   const [days, setDays] = useState(7);
   const [pageId, setPageId] = useState();
+  const [group, setGroup] = useState();
+  const [tab, setTab] = useState('charts');
   const [viralOnly, setViralOnly] = useState(false);
   const [q, setQ] = useState('');
   const [open, setOpen] = useState(null);
 
   const { data: pages = [] } = useApi('/pages');
+  const { data: groups = [] } = useApi('/groups');
   const { data: ov, reload: reloadOverview } = useApi('/overview', { refreshMs: 15_000 });
-  const query = new URLSearchParams({ days, ...(pageId && { pageId }), ...(viralOnly && { viral: '1' }) }).toString();
+  const query = new URLSearchParams({ days, ...(pageId && { pageId }), ...(group && { group }) }).toString();
   const { data = [], loading, reload } = useApi(`/reels?${query}`, { refreshMs: 60_000 });
 
   const refresh = async () => {
@@ -64,7 +68,8 @@ export default function Reels() {
   };
 
   const needle = q.toLowerCase();
-  const rows = data.filter((r) => !needle || (r.caption || '').toLowerCase().includes(needle));
+  const rows = data.filter((r) => (!viralOnly || r.viral) && (!needle || (r.caption || '').toLowerCase().includes(needle)));
+  const pageOptions = pages.filter((p) => !group || (group === '__none__' ? !p.group_name : p.group_name === group));
 
   const stats = [
     { title: 'Page đang bật', value: ov?.pages },
@@ -100,9 +105,28 @@ export default function Reels() {
       >
         <Space wrap style={{ marginBottom: 16 }}>
           <Segmented
+            value={tab}
+            onChange={setTab}
+            options={[
+              { value: 'charts', label: 'Biểu đồ', icon: <BarChartOutlined /> },
+              { value: 'list', label: 'Danh sách reel', icon: <UnorderedListOutlined /> },
+            ]}
+          />
+          <Segmented
             value={days}
             onChange={setDays}
             options={[{ value: 1, label: '24h' }, { value: 3, label: '3 ngày' }, { value: 7, label: '7 ngày' }, { value: 30, label: '30 ngày' }]}
+          />
+          <Select
+            allowClear
+            placeholder="Tất cả nhóm"
+            style={{ width: 170 }}
+            value={group}
+            onChange={(g) => { setGroup(g); setPageId(undefined); }}
+            options={[
+              ...groups.map((g) => ({ value: g.name, label: <Tag color={groupColor(g.name)} style={{ margin: 0 }}>{g.name}</Tag> })),
+              { value: '__none__', label: 'Chưa có nhóm' },
+            ]}
           />
           <Select
             allowClear
@@ -112,13 +136,20 @@ export default function Reels() {
             style={{ width: 220 }}
             value={pageId}
             onChange={setPageId}
-            options={pages.map((p) => ({ value: p.id, label: p.name }))}
+            options={pageOptions.map((p) => ({ value: p.id, label: p.name }))}
           />
-          <Space><Switch checked={viralOnly} onChange={setViralOnly} />Chỉ reel viral</Space>
-          <Input.Search placeholder="Tìm caption..." allowClear onChange={(e) => setQ(e.target.value)} style={{ width: 220 }} />
+          {tab === 'list' && (
+            <>
+              <Space><Switch checked={viralOnly} onChange={setViralOnly} />Chỉ reel viral</Space>
+              <Input.Search placeholder="Tìm caption..." allowClear onChange={(e) => setQ(e.target.value)} style={{ width: 220 }} />
+            </>
+          )}
           <Button type="text" icon={<ReloadOutlined />} onClick={() => reload()} />
         </Space>
 
+        {tab === 'charts' ? (
+          <ReelCharts reels={data} days={days} query={query} />
+        ) : (
         <Table
           rowKey="video_id"
           size="middle"
@@ -170,6 +201,7 @@ export default function Reels() {
             },
           ]}
         />
+        )}
       </Card>
       {open && <HistoryDrawer reel={open} onClose={() => setOpen(null)} />}
     </Space>

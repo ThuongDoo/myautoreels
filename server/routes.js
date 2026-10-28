@@ -12,6 +12,7 @@ function bad(message, statusCode = 400) {
 }
 
 const EDITABLE = ['pending', 'uploaded', 'failed', 'canceled'];
+const NO_GROUP = '__none__';
 
 function shuffled(arr) {
   const a = [...arr];
@@ -339,16 +340,50 @@ export function registerRoutes(app) {
   });
 
   // --- Reels & stats ---
+  // Page / group filters shared by the reels list and the charts.
+  function reelFilters(query) {
+    const where = [];
+    const args = [];
+    if (query.pageId) { where.push('r.page_id = ?'); args.push(query.pageId); }
+    if (query.group === NO_GROUP) where.push('p.group_name IS NULL');
+    else if (query.group) { where.push('p.group_name = ?'); args.push(query.group); }
+    return { where, args };
+  }
+
   app.get('/api/reels', async (req) => {
     const since = Date.now() - Number(req.query.days || 7) * 86_400_000;
-    const where = ['r.published_at >= ?'];
-    const args = [since];
-    if (req.query.pageId) { where.push('r.page_id = ?'); args.push(req.query.pageId); }
+    const { where, args } = reelFilters(req.query);
+    where.unshift('r.published_at >= ?');
+    args.unshift(since);
     if (req.query.viral === '1') where.push('r.viral = 1');
     return db.prepare(`
-      SELECT r.*, p.name AS page_name FROM reels r LEFT JOIN pages p ON p.id = r.page_id
+      SELECT r.*, p.name AS page_name, p.group_name FROM reels r LEFT JOIN pages p ON p.id = r.page_id
       WHERE ${where.join(' AND ')} ORDER BY r.views DESC LIMIT 3000
     `).all(...args);
+  });
+
+  // Views gained per hour (UTC hour buckets; the browser groups them into local days).
+  // Gain = difference between consecutive stat snapshots; a reel's first snapshot is
+  // credited to its publish hour, since those views came in between publish and first fetch.
+  app.get('/api/analytics/view-gains', async (req) => {
+    const since = Date.now() - Number(req.query.days || 7) * 86_400_000;
+    const { where, args } = reelFilters(req.query);
+    return db.prepare(`
+      WITH s AS (
+        SELECT rs.ts, rs.views, r.published_at,
+               LAG(rs.views) OVER (PARTITION BY rs.video_id ORDER BY rs.ts) AS prev
+        FROM reel_stats rs
+        JOIN reels r ON r.video_id = rs.video_id
+        LEFT JOIN pages p ON p.id = r.page_id
+        ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+      )
+      SELECT (CASE WHEN prev IS NULL THEN published_at ELSE ts END) / 3600000 * 3600000 AS hour,
+             SUM(MAX(views - COALESCE(prev, 0), 0)) AS gain
+      FROM s
+      GROUP BY hour
+      HAVING hour >= ?
+      ORDER BY hour
+    `).all(...args, since);
   });
 
   app.get('/api/reels/:id/history', async (req) =>
