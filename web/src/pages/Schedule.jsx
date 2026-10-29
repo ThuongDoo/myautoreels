@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Alert, App, Breadcrumb, Button, Card, Checkbox, Col, Collapse, DatePicker, Form, Input, InputNumber, Radio, Row, Select, Space, Spin, Table,
-  Tag, Tooltip, Typography,
+  Alert, App, Breadcrumb, Button, Card, Checkbox, Col, Collapse, DatePicker, Form, Input, InputNumber, Popconfirm, Popover, Radio, Row, Select,
+  Space, Spin, Table, Tag, Tooltip, Typography,
 } from 'antd';
-import { FolderOutlined, RightOutlined, VideoCameraOutlined } from '@ant-design/icons';
+import { DeleteOutlined, FolderOutlined, RightOutlined, SaveOutlined, VideoCameraOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { api, fmtSize, fmtSec, groupColor, useApi } from '../api.js';
 import { checkCaption, renderCaption } from '../caption.js';
@@ -67,6 +67,92 @@ const GUIDE_ROWS = [
   { syntax: '#hashtag', meaning: 'Gõ thẳng vào caption, nên để cuối, 3–5 cái', example: '#reels #{haihuoc|giaitri}' },
   { syntax: 'Enter', meaning: 'Xuống dòng giữ nguyên khi đăng', example: '' },
 ];
+
+function CaptionTemplates({ template, onPick }) {
+  const { message } = App.useApp();
+  const { data: list = [], reload } = useApi('/caption-templates');
+  const [currentId, setCurrentId] = useState();
+  const [saving, setSaving] = useState(false);
+  const [name, setName] = useState('');
+  const current = list.find((t) => t.id === currentId);
+
+  const pick = (id) => {
+    setCurrentId(id);
+    const t = list.find((x) => x.id === id);
+    if (t) onPick(t.template);
+  };
+
+  const save = async () => {
+    try {
+      const t = await api.post('/caption-templates', { name, template });
+      message.success(`Đã lưu mẫu "${t.name}"`);
+      setSaving(false);
+      await reload({ silent: true });
+      setCurrentId(t.id);
+    } catch (e) {
+      message.error(e.message);
+    }
+  };
+
+  const remove = async () => {
+    try {
+      await api.del(`/caption-templates/${currentId}`);
+      message.success(`Đã xoá mẫu "${current.name}"`);
+      setCurrentId(undefined);
+      reload({ silent: true });
+    } catch (e) {
+      message.error(e.message);
+    }
+  };
+
+  return (
+    <Space.Compact style={{ width: '100%', marginBottom: 8 }}>
+      <Select
+        allowClear
+        showSearch
+        optionFilterProp="label"
+        placeholder={list.length ? `Dùng mẫu đã lưu (${list.length})` : 'Chưa có mẫu nào'}
+        style={{ flex: 1, minWidth: 0 }}
+        value={currentId}
+        onChange={pick}
+        options={list.map((t) => ({ value: t.id, label: t.name }))}
+        optionRender={(o) => {
+          const t = list.find((x) => x.id === o.value);
+          return (
+            <div>
+              <div>{t.name}</div>
+              <Typography.Text type="secondary" ellipsis style={{ fontSize: 12, maxWidth: '100%' }}>{t.template}</Typography.Text>
+            </div>
+          );
+        }}
+      />
+      <Popover
+        trigger="click"
+        open={saving}
+        onOpenChange={(o) => { setSaving(o); if (o) setName(current?.name || ''); }}
+        title="Lưu caption làm mẫu"
+        content={(
+          <Space direction="vertical" style={{ width: 260 }}>
+            <Input autoFocus placeholder="Tên mẫu, ví dụ: Vẽ tranh - hashtag" value={name} onChange={(e) => setName(e.target.value)} onPressEnter={save} />
+            {list.some((t) => t.name === name.trim()) && (
+              <Typography.Text type="warning" style={{ fontSize: 12 }}>Trùng tên: mẫu cũ sẽ bị ghi đè.</Typography.Text>
+            )}
+            <Button type="primary" block onClick={save} disabled={!name.trim()}>Lưu</Button>
+          </Space>
+        )}
+      >
+        <Tooltip title="Lưu caption hiện tại làm mẫu">
+          <Button icon={<SaveOutlined />} disabled={!template?.trim()}>Lưu mẫu</Button>
+        </Tooltip>
+      </Popover>
+      {current && (
+        <Popconfirm title={`Xoá mẫu "${current.name}"?`} onConfirm={remove}>
+          <Tooltip title="Xoá mẫu đang chọn"><Button danger icon={<DeleteOutlined />} /></Tooltip>
+        </Popconfirm>
+      )}
+    </Space.Compact>
+  );
+}
 
 function CaptionHelper({ template, onInsert, sampleVideo, samplePages }) {
   const [seed, setSeed] = useState(0);
@@ -321,12 +407,16 @@ export default function Schedule() {
   };
 
   // Folder videos first, then individually picked ones; duplicates counted once.
-  const videos = useMemo(() => {
+  const pickedVideos = useMemo(() => {
     const map = new Map();
     for (const f of Object.values(folders)) for (const v of f.videos) map.set(v.id, v);
     for (const k of selectedKeys) if (videoCache.current[k]) map.set(k, videoCache.current[k]);
     return [...map.values()];
   }, [folders, selectedKeys]);
+  const isUsed = (v) => (values.skipUsed === 'posted' && v.posted > 0)
+    || (values.skipUsed === 'used' && (v.posted > 0 || v.upcoming > 0));
+  const videos = pickedVideos.filter((v) => !isUsed(v));
+  const skippedCount = pickedVideos.length - videos.length;
   const foldersLoading = Object.values(folders).some((f) => f.loading);
 
   const enabledPages = pages.filter((p) => p.enabled);
@@ -394,7 +484,7 @@ export default function Schedule() {
 
   const submit = async (v) => {
     if (foldersLoading) return message.warning('Đang tải danh sách video trong thư mục, chờ chút');
-    if (!V) return message.warning('Chưa chọn video nào');
+    if (!V) return message.warning(skippedCount ? 'Tất cả video đã chọn đều đã từng đăng' : 'Chưa chọn video nào');
     if (slotTimes.length < perPage) return message.warning('Chưa có khung giờ / giờ bắt đầu');
     if (checkCaption(v.captionTemplate).length) return message.error('Caption đang có lỗi, xem ngay dưới ô Caption');
     setSubmitting(true);
@@ -444,6 +534,7 @@ export default function Schedule() {
             initialValues={{
               mode: 'all',
               shuffle: true,
+              skipUsed: 'none',
               timing: 'slots',
               slots: ['07:00', '11:00', '20:00'],
               startDate: dayjs(),
@@ -493,6 +584,22 @@ export default function Schedule() {
                 optionFilterProp="label"
                 options={pageOptions}
               />
+            </Form.Item>
+
+            <Form.Item
+              label="Video đã từng dùng"
+              name="skipUsed"
+              extra={skippedCount > 0 && (
+                <Typography.Text type="warning">
+                  Bỏ qua {skippedCount}/{pickedVideos.length} video, còn {V} video sẽ được lên lịch.
+                </Typography.Text>
+              )}
+            >
+              <Radio.Group>
+                <Radio value="none">Vẫn đăng</Radio>
+                <Radio value="posted">Bỏ video đã đăng</Radio>
+                <Radio value="used">Bỏ video đã đăng hoặc đang chờ đăng</Radio>
+              </Radio.Group>
             </Form.Item>
 
             <Form.Item label="Cách phân bổ" name="mode">
@@ -560,6 +667,10 @@ export default function Schedule() {
               </Space.Compact>
             </Form.Item>
 
+            <CaptionTemplates
+              template={values.captionTemplate}
+              onPick={(t) => form.setFieldValue('captionTemplate', t)}
+            />
             <Form.Item label="Caption" name="captionTemplate" style={{ marginBottom: 8 }}>
               <Input.TextArea rows={5} placeholder="Nhập caption, ví dụ: {Hay quá|Xem ngay} {filename} #reels" />
             </Form.Item>

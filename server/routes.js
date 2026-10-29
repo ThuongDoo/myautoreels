@@ -50,6 +50,27 @@ export function registerRoutes(app) {
     return { ok: true };
   });
 
+  // --- Caption templates (saving with an existing name overwrites it) ---
+  app.get('/api/caption-templates', async () =>
+    db.prepare('SELECT id, name, template FROM caption_templates ORDER BY name').all());
+
+  app.post('/api/caption-templates', async (req) => {
+    const name = req.body?.name?.trim();
+    const template = req.body?.template || '';
+    if (!name) throw bad('Chưa nhập tên mẫu');
+    if (!template.trim()) throw bad('Caption đang trống');
+    db.prepare(`
+      INSERT INTO caption_templates (name, template, updated_at) VALUES (?, ?, ?)
+      ON CONFLICT(name) DO UPDATE SET template = excluded.template, updated_at = excluded.updated_at
+    `).run(name, template, Date.now());
+    return db.prepare('SELECT id, name, template FROM caption_templates WHERE name = ?').get(name);
+  });
+
+  app.delete('/api/caption-templates/:id', async (req) => {
+    db.prepare('DELETE FROM caption_templates WHERE id = ?').run(Number(req.params.id));
+    return { ok: true };
+  });
+
   // --- Pages ---
   app.get('/api/pages', async () => db.prepare(`
     SELECT p.id, p.name, p.picture, p.enabled, p.group_name, p.synced_at, p.account_id, a.name AS account_name
@@ -551,12 +572,13 @@ export function registerRoutes(app) {
   // Views gained per hour (UTC hour buckets; the browser groups them into local days).
   // Gain = difference between consecutive stat snapshots; a reel's first snapshot is
   // credited to its publish hour, since those views came in between publish and first fetch.
+  // One row per hour × page so the chart can show which pages the views came from.
   app.get('/api/analytics/view-gains', async (req) => {
     const since = Date.now() - Number(req.query.days || 7) * 86_400_000;
     const { where, args } = reelFilters(req.query);
     return db.prepare(`
       WITH s AS (
-        SELECT rs.ts, rs.views, r.published_at,
+        SELECT rs.ts, rs.views, r.published_at, r.page_id, p.name AS page_name,
                LAG(rs.views) OVER (PARTITION BY rs.video_id ORDER BY rs.ts) AS prev
         FROM reel_stats rs
         JOIN reels r ON r.video_id = rs.video_id
@@ -564,10 +586,11 @@ export function registerRoutes(app) {
         ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
       )
       SELECT (CASE WHEN prev IS NULL THEN published_at ELSE ts END) / 3600000 * 3600000 AS hour,
+             page_id, MAX(page_name) AS page_name,
              SUM(MAX(views - COALESCE(prev, 0), 0)) AS gain
       FROM s
-      GROUP BY hour
-      HAVING hour >= ?
+      GROUP BY hour, page_id
+      HAVING hour >= ? AND gain > 0
       ORDER BY hour
     `).all(...args, since);
   });

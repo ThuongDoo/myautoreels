@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
-import { Card, Col, Empty, Row, Segmented, Space, Statistic, Typography } from 'antd';
+import { Button, Card, Col, Empty, Row, Segmented, Space, Statistic, Table, Typography } from 'antd';
 import {
-  Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis,
+  Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts';
 import dayjs from 'dayjs';
 import { fmtNum, useApi } from '../api.js';
@@ -92,17 +92,45 @@ export default function ReelCharts({ reels, days, query }) {
     const count = hourly ? days * 24 : days;
     const end = dayjs().startOf(unit);
     const buckets = new Map();
-    for (let i = count - 1; i >= 0; i--) buckets.set(end.subtract(i, unit).valueOf(), { t: end.subtract(i, unit).valueOf(), gain: 0, posted: 0 });
+    for (let i = count - 1; i >= 0; i--) {
+      const t = end.subtract(i, unit).valueOf();
+      buckets.set(t, { t, gain: 0, posted: 0, pages: new Map() });
+    }
     for (const g of gains) {
       const b = buckets.get(bucketKey(g.hour));
-      if (b) b.gain += g.gain;
+      if (!b) continue;
+      b.gain += g.gain;
+      const p = b.pages.get(g.page_id) || { id: g.page_id, name: g.page_name || g.page_id, gain: 0 };
+      p.gain += g.gain;
+      b.pages.set(g.page_id, p);
     }
     for (const r of reels) {
       const b = buckets.get(bucketKey(r.published_at));
       if (b) b.posted++;
     }
-    return [...buckets.values()];
+    return [...buckets.values()].map((b) => ({ ...b, pages: [...b.pages.values()].sort((x, y) => y.gain - x.gain) }));
   }, [gains, reels, days, hourly]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Clicked bucket on the views chart, or null = whole period.
+  const [picked, setPicked] = useState(null);
+  const pickedBucket = timeline.find((b) => b.t === picked);
+  const pagesInRange = useMemo(() => {
+    if (pickedBucket) return pickedBucket.pages;
+    const map = new Map();
+    for (const b of timeline) {
+      for (const p of b.pages) {
+        const cur = map.get(p.id) || { ...p, gain: 0 };
+        cur.gain += p.gain;
+        map.set(p.id, cur);
+      }
+    }
+    return [...map.values()].sort((x, y) => y.gain - x.gain);
+  }, [timeline, pickedBucket]);
+  const rangeLabel = pickedBucket
+    ? (hourly
+      ? `${dayjs(pickedBucket.t).format('HH:00')} – ${dayjs(pickedBucket.t).add(1, 'hour').format('HH:00')} ngày ${dayjs(pickedBucket.t).format('DD/MM')}`
+      : `ngày ${dayjs(pickedBucket.t).format('DD/MM/YYYY')}`)
+    : `${days} ngày qua`;
 
   const byGroup = useMemo(() => {
     const map = new Map();
@@ -170,17 +198,36 @@ export default function ReelCharts({ reels, days, query }) {
         <Col xs={24} xl={14}>
           <ChartCard
             title={hourly ? 'Views mới theo giờ' : 'Views mới theo ngày'}
-            subtitle="Lượng views tăng thêm của các reel, tính từ các lần cập nhật số liệu."
+            subtitle={`Lượng views tăng thêm của các reel, tính từ các lần cập nhật số liệu. Bấm vào một ${hourly ? 'giờ' : 'ngày'} để xem page nào có views.`}
             empty={!hasViews}
           >
-            <AreaChart data={timeline} margin={{ top: 8, right: 24, left: 0, bottom: 0 }}>
+            <AreaChart
+              data={timeline}
+              margin={{ top: 8, right: 24, left: 0, bottom: 0 }}
+              style={{ cursor: 'pointer' }}
+              onClick={(s) => {
+                const t = timeline[Number(s?.activeIndex)]?.t ?? Number(s?.activeLabel);
+                if (t) setPicked((cur) => (cur === t ? null : t));
+              }}
+            >
               <CartesianGrid stroke={C.grid} vertical={false} />
               <XAxis dataKey="t" {...xAxis} tickFormatter={(t) => dayjs(t).format(bucketFormat)} minTickGap={24} />
               <YAxis {...yAxis} tickFormatter={compact} width={44} />
               <Tooltip
                 cursor={{ stroke: C.axis, strokeDasharray: '3 3' }}
-                content={<TooltipBox render={(d) => ({ title: dayjs(d.t).format(hourly ? 'HH:00 DD/MM/YYYY' : 'DD/MM/YYYY'), lines: [['Views mới', fmtNum(d.gain)], ['Reel đăng', d.posted]] })} />}
+                content={<TooltipBox render={(d) => ({
+                  title: dayjs(d.t).format(hourly ? 'HH:00 DD/MM/YYYY' : 'DD/MM/YYYY'),
+                  lines: [
+                    ['Views mới', fmtNum(d.gain)],
+                    ['Page có views', d.pages.length],
+                    ['Reel đăng', d.posted],
+                    ...d.pages.slice(0, 5).map((p) => [`· ${p.name}`, fmtNum(p.gain)]),
+                    ...(d.pages.length > 5 ? [[`… và ${d.pages.length - 5} page khác`, '']] : []),
+                  ],
+                })}
+                />}
               />
+              {pickedBucket && <ReferenceLine x={pickedBucket.t} stroke={C.series} strokeDasharray="4 3" />}
               <Area isAnimationActive={false} type="monotone" dataKey="gain" stroke={C.series} strokeWidth={2} fill={C.seriesFill} activeDot={{ r: 4, stroke: '#fff', strokeWidth: 2 }} />
             </AreaChart>
           </ChartCard>
@@ -202,6 +249,50 @@ export default function ReelCharts({ reels, days, query }) {
             </BarChart>
           </ChartCard>
         </Col>
+
+        {hasViews && (
+          <Col xs={24}>
+            <Card
+              size="small"
+              title={`Page có views mới · ${rangeLabel}`}
+              extra={(
+                <Space>
+                  <Typography.Text type="secondary">
+                    {pagesInRange.length} page · {fmtNum(pagesInRange.reduce((s, p) => s + p.gain, 0))} views
+                  </Typography.Text>
+                  {pickedBucket && <Button size="small" onClick={() => setPicked(null)}>Xem cả {days} ngày</Button>}
+                </Space>
+              )}
+            >
+              <Table
+                rowKey="id"
+                size="small"
+                dataSource={pagesInRange}
+                pagination={pagesInRange.length > 20 ? { pageSize: 20, showSizeChanger: false } : false}
+                locale={{ emptyText: 'Không có page nào có views mới trong khoảng này' }}
+                columns={[
+                  { title: '#', width: 48, render: (_, __, i) => i + 1 },
+                  { title: 'Page', dataIndex: 'name', ellipsis: true },
+                  {
+                    title: 'Views mới',
+                    dataIndex: 'gain',
+                    width: 280,
+                    sorter: (a, b) => a.gain - b.gain,
+                    defaultSortOrder: 'descend',
+                    render: (g) => (
+                      <Space style={{ width: '100%' }}>
+                        <div style={{ width: 160, height: 8, background: C.grid, borderRadius: 4 }}>
+                          <div style={{ width: `${(g / (pagesInRange[0]?.gain || 1)) * 100}%`, height: '100%', background: C.series, borderRadius: 4 }} />
+                        </div>
+                        <b>{fmtNum(g)}</b>
+                      </Space>
+                    ),
+                  },
+                ]}
+              />
+            </Card>
+          </Col>
+        )}
 
         <Col xs={24} xl={12}>
           <ChartCard

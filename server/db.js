@@ -91,6 +91,13 @@ db.exec(`
     business_id TEXT,
     created_at INTEGER
   );
+
+  CREATE TABLE IF NOT EXISTS caption_templates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    template TEXT NOT NULL,
+    updated_at INTEGER
+  );
 `);
 
 if (!db.prepare('PRAGMA table_info(pages)').all().some((c) => c.name === 'account_id')) {
