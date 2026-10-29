@@ -11,7 +11,15 @@ import VideoDrawer from './VideoDrawer.jsx';
 
 const viewsPerHour = (r) => r.views / Math.max(1, (Date.now() - r.published_at) / 3_600_000);
 
+const HISTORY_METRICS = {
+  views: { label: 'Views' },
+  likes: { label: 'Like' },
+  comments: { label: 'Comment' },
+  shares: { label: 'Share' },
+};
+
 function HistoryDrawer({ reel, onClose, onOpenVideo }) {
+  const [metric, setMetric] = useState('views');
   const { data = [], loading } = useApi(`/reels/${reel.video_id}/history`);
   const points = data.map((d) => ({ ...d, time: dayjs(d.ts).format('DD/MM HH:mm') }));
   return (
@@ -34,15 +42,23 @@ function HistoryDrawer({ reel, onClose, onOpenVideo }) {
         <Statistic title="Comment" value={reel.comments} />
         <Statistic title="Share" value={reel.shares} />
       </Space>
-      <Typography.Title level={5}>Views theo thời gian</Typography.Title>
+      <Space style={{ marginBottom: 8 }}>
+        <Typography.Title level={5} style={{ margin: 0 }}>{HISTORY_METRICS[metric].label} theo thời gian</Typography.Title>
+        <Segmented
+          size="small"
+          value={metric}
+          onChange={setMetric}
+          options={Object.entries(HISTORY_METRICS).map(([value, m]) => ({ value, label: m.label }))}
+        />
+      </Space>
       {points.length > 1 ? (
         <ResponsiveContainer width="100%" height={280}>
           <LineChart data={points} margin={{ left: 8, right: 8 }}>
             <CartesianGrid strokeDasharray="3 3" vertical={false} />
             <XAxis dataKey="time" tick={{ fontSize: 11 }} minTickGap={30} />
-            <YAxis tickFormatter={(v) => Intl.NumberFormat('vi-VN', { notation: 'compact' }).format(v)} width={50} />
+            <YAxis tickFormatter={(v) => Intl.NumberFormat('vi-VN', { notation: 'compact' }).format(v)} width={50} allowDecimals={false} />
             <ChartTooltip formatter={(v) => fmtNum(v)} />
-            <Line type="monotone" dataKey="views" name="Views" stroke="#e5484d" strokeWidth={2} dot={false} />
+            <Line type="monotone" dataKey={metric} name={HISTORY_METRICS[metric].label} stroke="#e5484d" strokeWidth={2} dot={false} />
           </LineChart>
         </ResponsiveContainer>
       ) : (

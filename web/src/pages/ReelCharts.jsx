@@ -45,8 +45,25 @@ const compact = (v) => {
   return String(Math.round(v));
 };
 const pct = (v) => `${(v * 100).toFixed(1)}%`;
-const engagement = (r) =>
-  r.views ? (r.likes + r.comments + r.shares) / r.views : 0;
+
+// The metric every chart follows. `reel` reads a reel's lifetime total, `gain` reads one
+// row of /analytics/view-gains (views gained there are in `gain`).
+const METRICS = {
+  views: { label: "Views", reel: (r) => r.views, gain: (g) => g.gain },
+  likes: { label: "Like", reel: (r) => r.likes, gain: (g) => g.likes },
+  comments: {
+    label: "Comment",
+    reel: (r) => r.comments,
+    gain: (g) => g.comments,
+  },
+  shares: { label: "Share", reel: (r) => r.shares, gain: (g) => g.shares },
+  interactions: {
+    label: "Tương tác",
+    tip: "Like + comment + share",
+    reel: (r) => r.likes + r.comments + r.shares,
+    gain: (g) => g.likes + g.comments + g.shares,
+  },
+};
 
 const xAxis = {
   tick: { fontSize: 11, fill: C.axis },
@@ -109,21 +126,22 @@ function ChartCard({ title, subtitle, extra, height = 260, empty, children }) {
   );
 }
 
+// Labels take the chosen metric's name, e.g. "Tổng like".
 const GROUP_METRICS = {
   total: {
-    label: "Tổng views",
-    get: (g) => g.views,
+    label: (m) => `Tổng ${m.label.toLowerCase()}`,
+    get: (g) => g.value,
     fmt: fmtNum,
     axis: compact,
   },
   avg: {
-    label: "Views TB / reel",
+    label: (m) => `${m.label} TB / reel`,
     get: (g) => g.avg,
     fmt: (v) => fmtNum(Math.round(v)),
     axis: compact,
   },
   eng: {
-    label: "Tỉ lệ tương tác",
+    label: () => "Tỉ lệ tương tác",
     get: (g) => g.eng,
     fmt: pct,
     axis: (v) => `${Math.round(v * 100)}%`,
@@ -133,7 +151,7 @@ const GROUP_METRICS = {
 // Windows for the top-pages chart. Starts are floored to the hour/day so the request URL
 // stays stable between renders. 'period' = lifetime views of reels posted in the page filter.
 const TOP_RANGES = {
-  period: { label: "Tổng views (theo kỳ lọc)" },
+  period: { label: "Tổng (theo kỳ lọc)" },
   "1h": {
     label: "1 giờ qua",
     range: () => [dayjs().startOf("hour").subtract(1, "hour")],
@@ -166,6 +184,9 @@ const TOP_RANGES = {
 };
 
 export default function ReelCharts({ reels, days, query }) {
+  const [metricKey, setMetricKey] = useState("views");
+  const M = METRICS[metricKey];
+  const unit = M.label.toLowerCase();
   const [groupMetric, setGroupMetric] = useState("total");
   const { data: gains = [] } = useApi(`/analytics/view-gains?${query}`);
 
@@ -180,12 +201,16 @@ export default function ReelCharts({ reels, days, query }) {
       (s, r) => s + r.likes + r.comments + r.shares,
       0,
     );
+    const sum = (f) => reels.reduce((s, r) => s + f(r), 0);
     return {
       views,
       count: reels.length,
       avg: reels.length ? views / reels.length : 0,
       eng: views ? interactions / views : 0,
       viral: reels.filter((r) => r.viral).length,
+      likes: sum((r) => r.likes),
+      comments: sum((r) => r.comments),
+      shares: sum((r) => r.shares),
     };
   }, [reels]);
 
@@ -201,14 +226,15 @@ export default function ReelCharts({ reels, days, query }) {
     }
     for (const g of gains) {
       const b = buckets.get(bucketKey(g.hour));
-      if (!b) continue;
-      b.gain += g.gain;
+      const value = M.gain(g);
+      if (!b || !value) continue;
+      b.gain += value;
       const p = b.pages.get(g.page_id) || {
         id: g.page_id,
         name: g.page_name || g.page_id,
         gain: 0,
       };
-      p.gain += g.gain;
+      p.gain += value;
       b.pages.set(g.page_id, p);
     }
     for (const r of reels) {
@@ -219,28 +245,36 @@ export default function ReelCharts({ reels, days, query }) {
       ...b,
       pages: [...b.pages.values()].sort((x, y) => y.gain - x.gain),
     }));
-  }, [gains, reels, days, hourly]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [gains, reels, days, hourly, metricKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // `value` = the chosen metric's total; `bar` = whatever the group toggle shows.
   const byGroup = useMemo(() => {
     const map = new Map();
     for (const r of reels) {
       const name = r.group_name || NO_GROUP_LABEL;
-      const g = map.get(name) || { name, views: 0, count: 0, interactions: 0 };
+      const g = map.get(name) || {
+        name,
+        views: 0,
+        value: 0,
+        count: 0,
+        interactions: 0,
+      };
       g.views += r.views;
+      g.value += M.reel(r);
       g.count++;
       g.interactions += r.likes + r.comments + r.shares;
       map.set(name, g);
     }
     const rows = [...map.values()].map((g) => ({
       ...g,
-      avg: g.views / g.count,
+      avg: g.value / g.count,
       eng: g.views ? g.interactions / g.views : 0,
     }));
-    const metric = GROUP_METRICS[groupMetric];
+    const gm = GROUP_METRICS[groupMetric];
     return rows
-      .sort((a, b) => metric.get(b) - metric.get(a))
-      .map((g) => ({ ...g, value: metric.get(g) }));
-  }, [reels, groupMetric]);
+      .sort((a, b) => gm.get(b) - gm.get(a))
+      .map((g) => ({ ...g, bar: gm.get(g) }));
+  }, [reels, groupMetric, metricKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [topRange, setTopRange] = useState("period");
   const [customRange, setCustomRange] = useState(() => [
@@ -270,21 +304,23 @@ export default function ReelCharts({ reels, days, query }) {
     if (!topFrom) {
       for (const r of reels) {
         const name = r.page_name || r.page_id;
-        const p = map.get(name) || { name, views: 0, count: 0 };
-        p.views += r.views;
+        const p = map.get(name) || { name, value: 0, count: 0 };
+        p.value += M.reel(r);
         p.count++;
         map.set(name, p);
       }
     } else {
       for (const g of topGains) {
         const name = g.page_name || g.page_id;
-        const p = map.get(name) || { name, views: 0 };
-        p.views += g.gain;
+        const p = map.get(name) || { name, value: 0 };
+        p.value += M.gain(g);
         map.set(name, p);
       }
     }
-    return [...map.values()].sort((a, b) => b.views - a.views);
-  }, [reels, topGains, !topFrom]); // eslint-disable-line react-hooks/exhaustive-deps
+    return [...map.values()]
+      .filter((p) => p.value > 0 || !topFrom)
+      .sort((a, b) => b.value - a.value);
+  }, [reels, topGains, !topFrom, metricKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Average views by local publish hour. Reels younger than 24h are left out when there are
   // enough older ones — they haven't had time to collect views and would drag their hour down.
@@ -295,17 +331,17 @@ export default function ReelCharts({ reels, days, query }) {
     const source = mature.length >= 10 ? mature : reels;
     const hours = Array.from({ length: 24 }, (_, h) => ({
       hour: h,
-      views: 0,
+      value: 0,
       count: 0,
     }));
     for (const r of source) {
       const h = hours[dayjs(r.published_at).hour()];
-      h.views += r.views;
+      h.value += M.reel(r);
       h.count++;
     }
     const rows = hours.map((h) => ({
       ...h,
-      avg: h.count ? h.views / h.count : 0,
+      avg: h.count ? h.value / h.count : 0,
     }));
     const best = new Set(
       rows
@@ -319,10 +355,10 @@ export default function ReelCharts({ reels, days, query }) {
       usedMature: source === mature,
       best: [...best].sort((a, b) => a - b),
     };
-  }, [reels]);
+  }, [reels, metricKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const metric = GROUP_METRICS[groupMetric];
-  const hasViews = timeline.some((d) => d.gain > 0);
+  const groupM = GROUP_METRICS[groupMetric];
+  const hasGain = timeline.some((d) => d.gain > 0);
 
   return (
     <Space direction="vertical" size={16} style={{ width: "100%" }}>
@@ -337,6 +373,9 @@ export default function ReelCharts({ reels, days, query }) {
             tip: "(like + comment + share) / views",
           },
           { title: "Reel viral", value: fmtNum(stats.viral) },
+          { title: "Tổng like", value: fmtNum(stats.likes) },
+          { title: "Tổng comment", value: fmtNum(stats.comments) },
+          { title: "Tổng share", value: fmtNum(stats.shares) },
         ].map((s) => (
           <Col flex="1 1 170px" key={s.title}>
             <Card size="small">
@@ -346,12 +385,25 @@ export default function ReelCharts({ reels, days, query }) {
         ))}
       </Row>
 
+      <Space wrap>
+        <Typography.Text strong>Biểu đồ theo:</Typography.Text>
+        <Segmented
+          value={metricKey}
+          onChange={setMetricKey}
+          options={Object.entries(METRICS).map(([value, m]) => ({
+            value,
+            label: m.tip ? <span title={m.tip}>{m.label}</span> : m.label,
+          }))}
+        />
+        {M.tip && <Typography.Text type="secondary">({M.tip})</Typography.Text>}
+      </Space>
+
       <Row gutter={[16, 16]}>
         <Col xs={24} xl={14}>
           <ChartCard
-            title={hourly ? "Views mới theo giờ" : "Views mới theo ngày"}
-            subtitle="Lượng views tăng thêm của các reel, tính từ các lần cập nhật số liệu."
-            empty={!hasViews}
+            title={`${M.label} mới theo ${hourly ? "giờ" : "ngày"}`}
+            subtitle={`Lượng ${unit} tăng thêm của các reel, tính từ các lần cập nhật số liệu.`}
+            empty={!hasGain}
           >
             <AreaChart
               data={timeline}
@@ -374,8 +426,8 @@ export default function ReelCharts({ reels, days, query }) {
                         hourly ? "HH:00 DD/MM/YYYY" : "DD/MM/YYYY",
                       ),
                       lines: [
-                        ["Views mới", fmtNum(d.gain)],
-                        ["Page có views", d.pages.length],
+                        [`${M.label} mới`, fmtNum(d.gain)],
+                        [`Page có ${unit}`, d.pages.length],
                         ["Reel đăng", d.posted],
                         ...d.pages
                           .slice(0, 5)
@@ -451,7 +503,7 @@ export default function ReelCharts({ reels, days, query }) {
                 onChange={setGroupMetric}
                 options={Object.entries(GROUP_METRICS).map(([value, m]) => ({
                   value,
-                  label: m.label,
+                  label: m.label(M),
                 }))}
               />
             }
@@ -465,7 +517,7 @@ export default function ReelCharts({ reels, days, query }) {
               barCategoryGap={6}
             >
               <CartesianGrid stroke={C.grid} horizontal={false} />
-              <XAxis type="number" {...xAxis} tickFormatter={metric.axis} />
+              <XAxis type="number" {...xAxis} tickFormatter={groupM.axis} />
               <YAxis
                 type="category"
                 dataKey="name"
@@ -480,10 +532,13 @@ export default function ReelCharts({ reels, days, query }) {
                     render={(g) => ({
                       title: g.name,
                       lines: [
-                        ["Tổng views", fmtNum(g.views)],
+                        [`Tổng ${unit}`, fmtNum(g.value)],
                         ["Số reel", g.count],
-                        ["Views TB / reel", fmtNum(Math.round(g.avg))],
-                        ["Tương tác", pct(g.eng)],
+                        [`${M.label} TB / reel`, fmtNum(Math.round(g.avg))],
+                        ...(metricKey === "views"
+                          ? []
+                          : [["Tổng views", fmtNum(g.views)]]),
+                        ["Tỉ lệ tương tác", pct(g.eng)],
                       ],
                     })}
                   />
@@ -491,7 +546,7 @@ export default function ReelCharts({ reels, days, query }) {
               />
               <Bar
                 isAnimationActive={false}
-                dataKey="value"
+                dataKey="bar"
                 fill={C.series}
                 radius={[0, 4, 4, 0]}
                 maxBarSize={22}
@@ -499,7 +554,7 @@ export default function ReelCharts({ reels, days, query }) {
                   position: "right",
                   fontSize: 11,
                   fill: "#52514e",
-                  formatter: metric.fmt,
+                  formatter: groupM.fmt,
                 }}
               />
             </BarChart>
@@ -507,11 +562,11 @@ export default function ReelCharts({ reels, days, query }) {
         </Col>
         <Col xs={24} xl={12}>
           <ChartCard
-            title={`Views theo page (${topPages.length} page)`}
+            title={`${M.label} theo page (${topPages.length} page)`}
             subtitle={
               topFrom
-                ? `Views mới trong khoảng ${topFrom.format("HH:00 DD/MM")} – ${(topTo || dayjs()).format(topTo ? "HH:00 DD/MM" : "HH:mm DD/MM")}${topLoading ? " · đang tải…" : ""}`
-                : `Tổng views của các reel đăng trong ${days} ngày qua`
+                ? `${M.label} mới trong khoảng ${topFrom.format("HH:00 DD/MM")} – ${(topTo || dayjs()).format(topTo ? "HH:00 DD/MM" : "HH:mm DD/MM")}${topLoading ? " · đang tải…" : ""}`
+                : `Tổng ${unit} của các reel đăng trong ${days} ngày qua`
             }
             extra={
               <Space size={8} wrap>
@@ -567,21 +622,21 @@ export default function ReelCharts({ reels, days, query }) {
                       title: p.name,
                       lines: p.count
                         ? [
-                            ["Tổng views", fmtNum(p.views)],
+                            [`Tổng ${unit}`, fmtNum(p.value)],
                             ["Số reel", p.count],
                             [
-                              "Views TB / reel",
-                              fmtNum(Math.round(p.views / p.count)),
+                              `${M.label} TB / reel`,
+                              fmtNum(Math.round(p.value / p.count)),
                             ],
                           ]
-                        : [["Views mới", fmtNum(p.views)]],
+                        : [[`${M.label} mới`, fmtNum(p.value)]],
                     })}
                   />
                 }
               />
               <Bar
                 isAnimationActive={false}
-                dataKey="views"
+                dataKey="value"
                 fill={C.series}
                 radius={[0, 4, 4, 0]}
                 maxBarSize={20}
@@ -601,7 +656,7 @@ export default function ReelCharts({ reels, days, query }) {
             title="Giờ đăng hiệu quả nhất"
             subtitle={
               <>
-                Views trung bình mỗi reel theo giờ đăng
+                {M.label} trung bình mỗi reel theo giờ đăng
                 {byHour.usedMature ? " (chỉ tính reel đã đăng hơn 24 giờ)" : ""}
                 .
                 {byHour.best.length > 0 && (
@@ -641,7 +696,7 @@ export default function ReelCharts({ reels, days, query }) {
                     render={(h) => ({
                       title: `${String(h.hour).padStart(2, "0")}:00 – ${String(h.hour).padStart(2, "0")}:59`,
                       lines: [
-                        ["Views TB / reel", fmtNum(Math.round(h.avg))],
+                        [`${M.label} TB / reel`, fmtNum(Math.round(h.avg))],
                         ["Số reel", h.count],
                       ],
                     })}

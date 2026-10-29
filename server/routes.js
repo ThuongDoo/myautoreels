@@ -611,7 +611,7 @@ export function registerRoutes(app) {
     `).all(...args);
   });
 
-  // Views gained per hour (UTC hour buckets; the browser groups them into local days).
+  // Views (`gain`) and likes / comments / shares gained per hour (UTC hour buckets; the browser groups them into local days).
   // Gain = difference between consecutive stat snapshots; a reel's first snapshot is
   // credited to its publish hour, since those views came in between publish and first fetch.
   // One row per hour × page so the chart can show which pages the views came from.
@@ -622,19 +622,27 @@ export function registerRoutes(app) {
     const { where, args } = reelFilters(req.query);
     return db.prepare(`
       WITH s AS (
-        SELECT rs.ts, rs.views, r.published_at, r.page_id, p.name AS page_name,
-               LAG(rs.views) OVER (PARTITION BY rs.video_id ORDER BY rs.ts) AS prev
+        SELECT rs.ts, rs.views, COALESCE(rs.likes, 0) AS likes, COALESCE(rs.comments, 0) AS comments,
+               COALESCE(rs.shares, 0) AS shares, r.published_at, r.page_id, p.name AS page_name,
+               LAG(rs.views) OVER w AS prev,
+               LAG(COALESCE(rs.likes, 0)) OVER w AS prev_likes,
+               LAG(COALESCE(rs.comments, 0)) OVER w AS prev_comments,
+               LAG(COALESCE(rs.shares, 0)) OVER w AS prev_shares
         FROM reel_stats rs
         JOIN reels r ON r.video_id = rs.video_id
         LEFT JOIN pages p ON p.id = r.page_id
         ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+        WINDOW w AS (PARTITION BY rs.video_id ORDER BY rs.ts)
       )
       SELECT (CASE WHEN prev IS NULL THEN published_at ELSE ts END) / 3600000 * 3600000 AS hour,
              page_id, MAX(page_name) AS page_name,
-             SUM(MAX(views - COALESCE(prev, 0), 0)) AS gain
+             SUM(MAX(views - COALESCE(prev, 0), 0)) AS gain,
+             SUM(MAX(likes - COALESCE(prev_likes, 0), 0)) AS likes,
+             SUM(MAX(comments - COALESCE(prev_comments, 0), 0)) AS comments,
+             SUM(MAX(shares - COALESCE(prev_shares, 0), 0)) AS shares
       FROM s
       GROUP BY hour, page_id
-      HAVING hour >= ? AND hour < ? AND gain > 0
+      HAVING hour >= ? AND hour < ? AND gain + likes + comments + shares > 0
       ORDER BY hour
     `).all(...args, since, until);
   });
