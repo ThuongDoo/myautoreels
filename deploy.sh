@@ -2,7 +2,10 @@
 # Run on the VPS to pull the latest code from GitHub and restart the app: bash deploy.sh
 set -euo pipefail
 cd "$(dirname "$0")"
-git pull --ff-only
+# The VPS never holds code edits; reset so lockfile churn from npm install can't block updates.
+# data/ and .env are gitignored and left alone.
+git fetch origin main
+git reset --hard origin/main
 npm install
 npm run build
 pm2 restart autoreels
