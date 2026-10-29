@@ -340,6 +340,11 @@ export default function Videos() {
               title: "Video",
               dataIndex: "name",
               ellipsis: true,
+              // numeric: true so "video 2" sorts before "video 10".
+              sorter: (a, b) =>
+                (a.name || a.id).localeCompare(b.name || b.id, "vi", {
+                  numeric: true,
+                }),
               render: (n, v) => (
                 <Space>
                   {v.viral > 0 && <FireOutlined style={{ color: "#f76b15" }} />}
