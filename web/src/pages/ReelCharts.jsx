@@ -330,7 +330,7 @@ export default function ReelCharts({ reels, days, query }) {
         {[
           { title: "Tổng views", value: fmtNum(stats.views) },
           { title: "Số reel", value: fmtNum(stats.count) },
-          { title: "Views TaaB / reel", value: fmtNum(Math.round(stats.avg)) },
+          { title: "Views TB / reel", value: fmtNum(Math.round(stats.avg)) },
           {
             title: "Tỉ lệ tương tác",
             value: pct(stats.eng),
