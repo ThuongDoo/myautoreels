@@ -165,76 +165,42 @@ export function getVideoStatus(videoId, token) {
 
 // --- Stats ---
 
-export async function listPageReels(pageId, token, sinceSec) {
-  const first = await graph('GET', `/${pageId}/video_reels`, {
-    fields: 'id,description,created_time,permalink_url',
-    since: sinceSec,
-    limit: 50,
-  }, token);
-  return collect(first, 5);
-}
-
-const METRICS = [
-  'blue_reels_play_count',
-  'fb_reels_total_plays',
-  'post_impressions_unique',
-  'post_video_avg_time_watched',
-  'post_video_social_actions',
-];
-// Metric names change between Graph versions; if the combined call fails we
-// probe each one once and remember which ones this API version accepts.
-let workingMetrics = null;
-
-async function fetchInsights(videoId, token) {
-  if (workingMetrics) {
-    if (!workingMetrics.length) return [];
-    return (await graph('GET', `/${videoId}/video_insights`, { metric: workingMetrics.join(',') }, token)).data || [];
-  }
-  try {
-    const data = (await graph('GET', `/${videoId}/video_insights`, { metric: METRICS.join(',') }, token)).data || [];
-    workingMetrics = METRICS;
-    return data;
-  } catch {
-    const ok = [];
-    const out = [];
-    for (const metric of METRICS) {
-      try {
-        out.push(...((await graph('GET', `/${videoId}/video_insights`, { metric }, token)).data || []));
-        ok.push(metric);
-      } catch { /* unsupported metric */ }
-    }
-    workingMetrics = ok;
-    return out;
-  }
-}
+// Fetched as nested fields of the reel list, so one call per page returns every reel's
+// numbers (instead of 2 calls per reel) — keeps us well under the app's hourly call limit.
+const METRICS = ['blue_reels_play_count', 'fb_reels_total_plays', 'post_video_avg_time_watched', 'post_video_social_actions'];
+const BASE_FIELDS = 'id,description,created_time,permalink_url,likes.summary(true).limit(0),comments.summary(true).limit(0)';
 
 const num = (v) => (typeof v === 'number' ? v : Number(v) || 0);
 
-export async function getReelStats(videoId, token) {
-  const insights = await fetchInsights(videoId, token);
+function reelStats(r) {
+  const insights = r.video_insights?.data || [];
   const metric = (name) => insights.find((d) => d.name === name)?.values?.[0]?.value;
-
   const social = metric('post_video_social_actions') || {};
   const socialGet = (key) => num(Object.entries(social).find(([k]) => k.toLowerCase() === key)?.[1]);
-
-  let likes = 0;
-  let comments = socialGet('comment');
-  try {
-    const v = await graph('GET', `/${videoId}`, {
-      fields: 'likes.summary(true).limit(0),comments.summary(true).limit(0)',
-    }, token);
-    likes = num(v.likes?.summary?.total_count);
-    comments = num(v.comments?.summary?.total_count) || comments;
-  } catch { /* fields not available for this video */ }
-
   return {
     views: num(metric('blue_reels_play_count') ?? metric('fb_reels_total_plays')),
-    reach: num(metric('post_impressions_unique')),
+    reach: 0,
     avg_watch_ms: num(metric('post_video_avg_time_watched')),
-    likes,
-    comments,
+    likes: num(r.likes?.summary?.total_count),
+    comments: num(r.comments?.summary?.total_count) || socialGet('comment'),
     shares: socialGet('share'),
   };
+}
+
+// Reels published since sinceSec, each with a `stats` object.
+export async function listPageReels(pageId, token, sinceSec) {
+  const list = (fields) => graph('GET', `/${pageId}/video_reels`, { fields, since: sinceSec, limit: 50 }, token)
+    .then((first) => collect(first, 5));
+  try {
+    const reels = await list(`${BASE_FIELDS},video_insights.metric(${METRICS.join(',')})`);
+    return reels.map((r) => ({ ...r, stats: reelStats(r) }));
+  } catch (e) {
+    // A metric renamed in a newer Graph version fails the whole call; still list the reels,
+    // but with stats = null so existing numbers aren't overwritten with zeros.
+    if (e.details?.code !== 100) throw e;
+    console.error(`[stats] page ${pageId}: không đọc được insights (${e.message})`);
+    return (await list(BASE_FIELDS)).map((r) => ({ ...r, stats: null }));
+  }
 }
 
 export function normalizePermalink(link, videoId) {

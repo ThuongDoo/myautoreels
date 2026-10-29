@@ -1,4 +1,4 @@
-import { db, getSetting, setSetting } from './db.js';
+import { db, getSetting, setSetting, transaction } from './db.js';
 import * as fb from './fb.js';
 import { notify } from './telegram.js';
 
@@ -51,25 +51,20 @@ async function refreshPage(page, since) {
     INSERT INTO reels (video_id, page_id, caption, permalink, published_at) VALUES (?, ?, ?, ?, ?)
     ON CONFLICT(video_id) DO UPDATE SET permalink = excluded.permalink, caption = COALESCE(reels.caption, excluded.caption)
   `);
-  for (const r of list) {
-    upsert.run(r.id, page.id, r.description ?? null, fb.normalizePermalink(r.permalink_url, r.id), Date.parse(r.created_time) || Date.now());
-  }
-
-  const reels = db.prepare('SELECT video_id FROM reels WHERE page_id = ? AND published_at >= ?').all(page.id, since);
   const update = db.prepare(`
     UPDATE reels SET views = ?, reach = ?, likes = ?, comments = ?, shares = ?, avg_watch_ms = ?, stats_at = ? WHERE video_id = ?
   `);
   const history = db.prepare('INSERT INTO reel_stats (video_id, ts, views, likes, comments, shares) VALUES (?, ?, ?, ?, ?, ?)');
-  for (const { video_id } of reels) {
-    try {
-      const s = await fb.getReelStats(video_id, page.access_token);
-      const now = Date.now();
-      update.run(s.views, s.reach, s.likes, s.comments, s.shares, s.avg_watch_ms, now, video_id);
-      history.run(video_id, now, s.views, s.likes, s.comments, s.shares);
-    } catch (e) {
-      console.error(`[stats] reel ${video_id}: ${e.message}`);
+  const now = Date.now();
+  transaction(() => {
+    for (const r of list) {
+      upsert.run(r.id, page.id, r.description ?? null, fb.normalizePermalink(r.permalink_url, r.id), Date.parse(r.created_time) || now);
+      const s = r.stats;
+      if (!s) continue;
+      update.run(s.views, s.reach, s.likes, s.comments, s.shares, s.avg_watch_ms, now, r.id);
+      history.run(r.id, now, s.views, s.likes, s.comments, s.shares);
     }
-  }
+  });
   computeViral(page);
 }
 
