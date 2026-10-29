@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
-import { Button, Card, Col, Empty, Row, Segmented, Space, Statistic, Table, Typography } from 'antd';
+import { Card, Col, DatePicker, Empty, Row, Segmented, Select, Space, Statistic, Typography } from 'antd';
 import {
-  Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis,
+  Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts';
 import dayjs from 'dayjs';
 import { fmtNum, useApi } from '../api.js';
@@ -66,6 +66,20 @@ const GROUP_METRICS = {
   eng: { label: 'Tỉ lệ tương tác', get: (g) => g.eng, fmt: pct, axis: (v) => `${Math.round(v * 100)}%` },
 };
 
+// Windows for the top-pages chart. Starts are floored to the hour/day so the request URL
+// stays stable between renders. 'period' = lifetime views of reels posted in the page filter.
+const TOP_RANGES = {
+  period: { label: 'Tổng views (theo kỳ lọc)' },
+  '1h': { label: '1 giờ qua', range: () => [dayjs().startOf('hour').subtract(1, 'hour')] },
+  '6h': { label: '6 giờ qua', range: () => [dayjs().startOf('hour').subtract(6, 'hour')] },
+  '24h': { label: '24 giờ qua', range: () => [dayjs().startOf('hour').subtract(24, 'hour')] },
+  today: { label: 'Hôm nay', range: () => [dayjs().startOf('day')] },
+  yesterday: { label: 'Hôm qua', range: () => [dayjs().startOf('day').subtract(1, 'day'), dayjs().startOf('day')] },
+  '7d': { label: '7 ngày qua', range: () => [dayjs().startOf('day').subtract(6, 'day')] },
+  '30d': { label: '30 ngày qua', range: () => [dayjs().startOf('day').subtract(29, 'day')] },
+  custom: { label: 'Tùy chọn…' },
+};
+
 export default function ReelCharts({ reels, days, query }) {
   const [groupMetric, setGroupMetric] = useState('total');
   const { data: gains = [] } = useApi(`/analytics/view-gains?${query}`);
@@ -111,27 +125,6 @@ export default function ReelCharts({ reels, days, query }) {
     return [...buckets.values()].map((b) => ({ ...b, pages: [...b.pages.values()].sort((x, y) => y.gain - x.gain) }));
   }, [gains, reels, days, hourly]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Clicked bucket on the views chart, or null = whole period.
-  const [picked, setPicked] = useState(null);
-  const pickedBucket = timeline.find((b) => b.t === picked);
-  const pagesInRange = useMemo(() => {
-    if (pickedBucket) return pickedBucket.pages;
-    const map = new Map();
-    for (const b of timeline) {
-      for (const p of b.pages) {
-        const cur = map.get(p.id) || { ...p, gain: 0 };
-        cur.gain += p.gain;
-        map.set(p.id, cur);
-      }
-    }
-    return [...map.values()].sort((x, y) => y.gain - x.gain);
-  }, [timeline, pickedBucket]);
-  const rangeLabel = pickedBucket
-    ? (hourly
-      ? `${dayjs(pickedBucket.t).format('HH:00')} – ${dayjs(pickedBucket.t).add(1, 'hour').format('HH:00')} ngày ${dayjs(pickedBucket.t).format('DD/MM')}`
-      : `ngày ${dayjs(pickedBucket.t).format('DD/MM/YYYY')}`)
-    : `${days} ngày qua`;
-
   const byGroup = useMemo(() => {
     const map = new Map();
     for (const r of reels) {
@@ -147,17 +140,40 @@ export default function ReelCharts({ reels, days, query }) {
     return rows.sort((a, b) => metric.get(b) - metric.get(a)).map((g) => ({ ...g, value: metric.get(g) }));
   }, [reels, groupMetric]);
 
+  const [topRange, setTopRange] = useState('period');
+  const [customRange, setCustomRange] = useState(() => [dayjs().startOf('day').subtract(1, 'day'), dayjs().startOf('hour')]);
+  const [topFrom, topTo] = topRange === 'custom'
+    ? [customRange[0].startOf('hour'), customRange[1].startOf('hour').add(1, 'hour')]
+    : TOP_RANGES[topRange].range?.() || [];
+  const topQuery = useMemo(() => {
+    const q = new URLSearchParams(query);
+    q.delete('days');
+    if (topFrom) q.set('from', topFrom.valueOf());
+    if (topTo) q.set('to', topTo.valueOf());
+    return q.toString();
+  }, [query, topFrom?.valueOf(), topTo?.valueOf()]); // eslint-disable-line react-hooks/exhaustive-deps
+  const { data: topGains = [], loading: topLoading } = useApi(topFrom ? `/analytics/view-gains?${topQuery}` : null);
+
   const topPages = useMemo(() => {
     const map = new Map();
-    for (const r of reels) {
-      const name = r.page_name || r.page_id;
-      const p = map.get(name) || { name, views: 0, count: 0 };
-      p.views += r.views;
-      p.count++;
-      map.set(name, p);
+    if (!topFrom) {
+      for (const r of reels) {
+        const name = r.page_name || r.page_id;
+        const p = map.get(name) || { name, views: 0, count: 0 };
+        p.views += r.views;
+        p.count++;
+        map.set(name, p);
+      }
+    } else {
+      for (const g of topGains) {
+        const name = g.page_name || g.page_id;
+        const p = map.get(name) || { name, views: 0 };
+        p.views += g.gain;
+        map.set(name, p);
+      }
     }
-    return [...map.values()].sort((a, b) => b.views - a.views).slice(0, 10);
-  }, [reels]);
+    return [...map.values()].sort((a, b) => b.views - a.views);
+  }, [reels, topGains, !topFrom]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Average views by local publish hour. Reels younger than 24h are left out when there are
   // enough older ones — they haven't had time to collect views and would drag their hour down.
@@ -198,18 +214,10 @@ export default function ReelCharts({ reels, days, query }) {
         <Col xs={24} xl={14}>
           <ChartCard
             title={hourly ? 'Views mới theo giờ' : 'Views mới theo ngày'}
-            subtitle={`Lượng views tăng thêm của các reel, tính từ các lần cập nhật số liệu. Bấm vào một ${hourly ? 'giờ' : 'ngày'} để xem page nào có views.`}
+            subtitle="Lượng views tăng thêm của các reel, tính từ các lần cập nhật số liệu."
             empty={!hasViews}
           >
-            <AreaChart
-              data={timeline}
-              margin={{ top: 8, right: 24, left: 0, bottom: 0 }}
-              style={{ cursor: 'pointer' }}
-              onClick={(s) => {
-                const t = timeline[Number(s?.activeIndex)]?.t ?? Number(s?.activeLabel);
-                if (t) setPicked((cur) => (cur === t ? null : t));
-              }}
-            >
+            <AreaChart data={timeline} margin={{ top: 8, right: 24, left: 0, bottom: 0 }}>
               <CartesianGrid stroke={C.grid} vertical={false} />
               <XAxis dataKey="t" {...xAxis} tickFormatter={(t) => dayjs(t).format(bucketFormat)} minTickGap={24} />
               <YAxis {...yAxis} tickFormatter={compact} width={44} />
@@ -227,7 +235,6 @@ export default function ReelCharts({ reels, days, query }) {
                 })}
                 />}
               />
-              {pickedBucket && <ReferenceLine x={pickedBucket.t} stroke={C.series} strokeDasharray="4 3" />}
               <Area isAnimationActive={false} type="monotone" dataKey="gain" stroke={C.series} strokeWidth={2} fill={C.seriesFill} activeDot={{ r: 4, stroke: '#fff', strokeWidth: 2 }} />
             </AreaChart>
           </ChartCard>
@@ -249,50 +256,6 @@ export default function ReelCharts({ reels, days, query }) {
             </BarChart>
           </ChartCard>
         </Col>
-
-        {hasViews && (
-          <Col xs={24}>
-            <Card
-              size="small"
-              title={`Page có views mới · ${rangeLabel}`}
-              extra={(
-                <Space>
-                  <Typography.Text type="secondary">
-                    {pagesInRange.length} page · {fmtNum(pagesInRange.reduce((s, p) => s + p.gain, 0))} views
-                  </Typography.Text>
-                  {pickedBucket && <Button size="small" onClick={() => setPicked(null)}>Xem cả {days} ngày</Button>}
-                </Space>
-              )}
-            >
-              <Table
-                rowKey="id"
-                size="small"
-                dataSource={pagesInRange}
-                pagination={pagesInRange.length > 20 ? { pageSize: 20, showSizeChanger: false } : false}
-                locale={{ emptyText: 'Không có page nào có views mới trong khoảng này' }}
-                columns={[
-                  { title: '#', width: 48, render: (_, __, i) => i + 1 },
-                  { title: 'Page', dataIndex: 'name', ellipsis: true },
-                  {
-                    title: 'Views mới',
-                    dataIndex: 'gain',
-                    width: 280,
-                    sorter: (a, b) => a.gain - b.gain,
-                    defaultSortOrder: 'descend',
-                    render: (g) => (
-                      <Space style={{ width: '100%' }}>
-                        <div style={{ width: 160, height: 8, background: C.grid, borderRadius: 4 }}>
-                          <div style={{ width: `${(g / (pagesInRange[0]?.gain || 1)) * 100}%`, height: '100%', background: C.series, borderRadius: 4 }} />
-                        </div>
-                        <b>{fmtNum(g)}</b>
-                      </Space>
-                    ),
-                  },
-                ]}
-              />
-            </Card>
-          </Col>
-        )}
 
         <Col xs={24} xl={12}>
           <ChartCard
@@ -332,7 +295,36 @@ export default function ReelCharts({ reels, days, query }) {
           </ChartCard>
         </Col>
         <Col xs={24} xl={12}>
-          <ChartCard title="Top 10 page nhiều views nhất" height={Math.max(160, topPages.length * 32 + 40)} empty={!topPages.length}>
+          <ChartCard
+            title={`Views theo page (${topPages.length} page)`}
+            subtitle={topFrom
+              ? `Views mới trong khoảng ${topFrom.format('HH:00 DD/MM')} – ${(topTo || dayjs()).format(topTo ? 'HH:00 DD/MM' : 'HH:mm DD/MM')}${topLoading ? ' · đang tải…' : ''}`
+              : `Tổng views của các reel đăng trong ${days} ngày qua`}
+            extra={(
+              <Space size={8} wrap>
+                {topRange === 'custom' && (
+                  <DatePicker.RangePicker
+                    size="small"
+                    showTime={{ format: 'HH:00' }}
+                    format="DD/MM HH:00"
+                    allowClear={false}
+                    value={customRange}
+                    onChange={(v) => v && setCustomRange(v)}
+                    disabledDate={(d) => d.isAfter(dayjs(), 'day')}
+                  />
+                )}
+                <Select
+                  size="small"
+                  style={{ width: 190 }}
+                  value={topRange}
+                  onChange={setTopRange}
+                  options={Object.entries(TOP_RANGES).map(([value, r]) => ({ value, label: r.label }))}
+                />
+              </Space>
+            )}
+            height={Math.max(160, topPages.length * 32 + 40)}
+            empty={!topPages.length}
+          >
             <BarChart data={topPages} layout="vertical" margin={{ top: 0, right: 56, left: 0, bottom: 0 }} barCategoryGap={6}>
               <CartesianGrid stroke={C.grid} horizontal={false} />
               <XAxis type="number" {...xAxis} tickFormatter={compact} />
@@ -348,7 +340,9 @@ export default function ReelCharts({ reels, days, query }) {
                 cursor={{ fill: 'rgba(11,11,11,0.04)' }}
                 content={<TooltipBox render={(p) => ({
                   title: p.name,
-                  lines: [['Tổng views', fmtNum(p.views)], ['Số reel', p.count], ['Views TB / reel', fmtNum(Math.round(p.views / p.count))]],
+                  lines: p.count
+                    ? [['Tổng views', fmtNum(p.views)], ['Số reel', p.count], ['Views TB / reel', fmtNum(Math.round(p.views / p.count))]]
+                    : [['Views mới', fmtNum(p.views)]],
                 })}
                 />}
               />

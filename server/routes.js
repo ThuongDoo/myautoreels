@@ -573,8 +573,10 @@ export function registerRoutes(app) {
   // Gain = difference between consecutive stat snapshots; a reel's first snapshot is
   // credited to its publish hour, since those views came in between publish and first fetch.
   // One row per hour × page so the chart can show which pages the views came from.
+  // `from`/`to` (ms) pick an exact window instead of the last `days` days.
   app.get('/api/analytics/view-gains', async (req) => {
-    const since = Date.now() - Number(req.query.days || 7) * 86_400_000;
+    const since = req.query.from ? Number(req.query.from) : Date.now() - Number(req.query.days || 7) * 86_400_000;
+    const until = req.query.to ? Number(req.query.to) : Number.MAX_SAFE_INTEGER;
     const { where, args } = reelFilters(req.query);
     return db.prepare(`
       WITH s AS (
@@ -590,9 +592,9 @@ export function registerRoutes(app) {
              SUM(MAX(views - COALESCE(prev, 0), 0)) AS gain
       FROM s
       GROUP BY hour, page_id
-      HAVING hour >= ? AND gain > 0
+      HAVING hour >= ? AND hour < ? AND gain > 0
       ORDER BY hour
-    `).all(...args, since);
+    `).all(...args, since, until);
   });
 
   app.get('/api/reels/:id/history', async (req) =>
