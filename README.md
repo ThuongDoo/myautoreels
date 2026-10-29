@@ -22,6 +22,12 @@ pm2 start npm --name autoreels -- start
 pm2 save && pm2 startup
 ```
 
+Cập nhật code trên VPS (sau khi đã push lên GitHub):
+
+```bash
+ssh root@157.66.101.249 "bash /opt/autoreels/deploy.sh"
+```
+
 ## Cấu hình lần đầu
 
 ### 1. Facebook (không cần App Review)
