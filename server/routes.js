@@ -402,8 +402,50 @@ export function registerRoutes(app) {
     return videos.map((v) => ({ ...v, posted: usage.get(v.id)?.posted || 0, upcoming: usage.get(v.id)?.upcoming || 0 }));
   }
 
+  // --- Video groups (same shape as page groups) ---
+  app.get('/api/video-groups', async () => db.prepare(`
+    SELECT g.name, COUNT(m.drive_file_id) AS total
+    FROM video_groups g LEFT JOIN video_meta m ON m.group_name = g.name
+    GROUP BY g.name ORDER BY g.name
+  `).all());
+
+  app.post('/api/video-groups', async (req) => {
+    const name = req.body?.name?.trim();
+    if (!name) throw bad('Nhập tên nhóm');
+    if (db.prepare('SELECT 1 FROM video_groups WHERE name = ?').get(name)) throw bad(`Nhóm "${name}" đã có`);
+    db.prepare('INSERT INTO video_groups (name, created_at) VALUES (?, ?)').run(name, Date.now());
+    return { name };
+  });
+
+  // Rename (merging if the new name exists), or delete when `to` is empty — videos become ungrouped.
+  app.post('/api/video-groups/rename', async (req) => {
+    const from = req.body?.from;
+    const to = req.body?.to?.trim() || null;
+    if (!from) throw bad('Thiếu tên nhóm');
+    let changed = 0;
+    transaction(() => {
+      db.prepare('DELETE FROM video_groups WHERE name = ?').run(from);
+      if (to) db.prepare('INSERT OR IGNORE INTO video_groups (name, created_at) VALUES (?, ?)').run(to, Date.now());
+      changed = Number(db.prepare('UPDATE video_meta SET group_name = ? WHERE group_name = ?').run(to, from).changes);
+    });
+    return { changed };
+  });
+
+  app.post('/api/videos/group', async (req) => {
+    const { ids = [], group_name } = req.body || {};
+    const name = group_name?.trim() || null;
+    transaction(() => {
+      if (name) db.prepare('INSERT OR IGNORE INTO video_groups (name, created_at) VALUES (?, ?)').run(name, Date.now());
+      const stmt = db.prepare(`INSERT INTO video_meta (drive_file_id, group_name) VALUES (?, ?)
+                               ON CONFLICT(drive_file_id) DO UPDATE SET group_name = excluded.group_name`);
+      for (const id of ids) stmt.run(id, name);
+    });
+    return { ok: true };
+  });
+
   app.get('/api/videos', async () => db.prepare(`
     SELECT j.drive_file_id AS id, MAX(j.drive_file_name) AS name,
+           (SELECT group_name FROM video_meta m WHERE m.drive_file_id = j.drive_file_id) AS group_name,
            SUM(j.status = 'done') AS posted,
            SUM(j.status IN ${ACTIVE}) AS upcoming,
            SUM(j.status = 'failed') AS failed,

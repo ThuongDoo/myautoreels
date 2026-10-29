@@ -92,6 +92,16 @@ db.exec(`
     created_at INTEGER
   );
 
+  -- Groups for source videos (Drive files), separate from page groups. One group per video.
+  CREATE TABLE IF NOT EXISTS video_groups (
+    name TEXT PRIMARY KEY,
+    created_at INTEGER
+  );
+  CREATE TABLE IF NOT EXISTS video_meta (
+    drive_file_id TEXT PRIMARY KEY,
+    group_name TEXT
+  );
+
   CREATE TABLE IF NOT EXISTS caption_templates (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE,

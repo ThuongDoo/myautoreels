@@ -1,108 +1,15 @@
 import { useEffect, useState } from 'react';
 import {
-  App, Avatar, Button, Card, Divider, Dropdown, Input, Modal, Popconfirm, Select, Space, Switch, Table, Tag, Typography,
+  App, Avatar, Button, Card, Divider, Dropdown, Input, Popconfirm, Select, Space, Switch, Table, Tag, Typography,
 } from 'antd';
-import { DeleteOutlined, DownOutlined, EditOutlined, PictureOutlined, PlusOutlined, SettingOutlined, SyncOutlined } from '@ant-design/icons';
+import { DownOutlined, PictureOutlined, SettingOutlined, SyncOutlined } from '@ant-design/icons';
 import { api, groupColor, useApi } from '../api.js';
 import AvatarBulkModal from './AvatarBulk.jsx';
 import TaskProgressModal, { LOG_COLORS } from './TaskProgress.jsx';
+import { GroupManagerModal, NewGroupInput } from './GroupControls.jsx';
 
 const NO_GROUP = '__none__';
 
-function NewGroupInput({ onCreated, buttonText = 'Tạo nhóm' }) {
-  const { message } = App.useApp();
-  const [name, setName] = useState('');
-  const create = async () => {
-    const n = name.trim();
-    if (!n) return;
-    try {
-      await api.post('/groups', { name: n });
-      setName('');
-      onCreated(n);
-    } catch (e) {
-      message.error(e.message);
-    }
-  };
-  return (
-    <Space.Compact style={{ width: '100%' }}>
-      <Input
-        placeholder="Tên nhóm mới, ví dụ: Vẽ, Yoga"
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-        onPressEnter={create}
-        onKeyDown={(e) => e.stopPropagation()}
-      />
-      <Button type="primary" icon={<PlusOutlined />} disabled={!name.trim()} onClick={create}>{buttonText}</Button>
-    </Space.Compact>
-  );
-}
-
-function GroupManagerModal({ groups, onClose, onChanged }) {
-  const { message } = App.useApp();
-  const [editing, setEditing] = useState(null);
-  const [name, setName] = useState('');
-
-  const stats = groups.map((g) => ({ group: g.name, total: g.total, enabled: g.enabled }));
-
-  const rename = async (from, to) => {
-    try {
-      await api.post('/groups/rename', { from, to });
-      message.success(to ? `Đã đổi "${from}" thành "${to}"` : `Đã xoá nhóm "${from}"`);
-      setEditing(null);
-      onChanged();
-    } catch (e) {
-      message.error(e.message);
-    }
-  };
-
-  return (
-    <Modal open title="Quản lý nhóm page" footer={null} onCancel={onClose} width={600}>
-      <div style={{ marginBottom: 16 }}>
-        <NewGroupInput onCreated={(n) => { message.success(`Đã tạo nhóm "${n}"`); onChanged(); }} />
-      </div>
-      <Typography.Paragraph type="secondary" style={{ fontSize: 13 }}>
-        Sau khi tạo nhóm: tick chọn page ở bảng bên ngoài, rồi chọn nhóm ở ô "Chuyển vào nhóm". Mỗi page thuộc tối đa 1 nhóm.
-      </Typography.Paragraph>
-      <Table
-        size="small"
-        rowKey="group"
-        pagination={false}
-        dataSource={stats}
-        locale={{ emptyText: 'Chưa có nhóm nào' }}
-        columns={[
-          {
-            title: 'Nhóm',
-            dataIndex: 'group',
-            render: (g) => (editing === g ? (
-              <Space.Compact>
-                <Input size="small" value={name} onChange={(e) => setName(e.target.value)} onPressEnter={() => name.trim() && rename(g, name)} autoFocus />
-                <Button size="small" type="primary" disabled={!name.trim()} onClick={() => rename(g, name)}>Lưu</Button>
-                <Button size="small" onClick={() => setEditing(null)}>Huỷ</Button>
-              </Space.Compact>
-            ) : <Tag color={groupColor(g)}>{g}</Tag>),
-          },
-          { title: 'Số page', dataIndex: 'total', width: 80, align: 'right' },
-          { title: 'Đang bật', dataIndex: 'enabled', width: 90, align: 'right' },
-          {
-            width: 90,
-            render: (_, r) => (
-              <Space size={0}>
-                <Button type="text" size="small" icon={<EditOutlined />} onClick={() => { setEditing(r.group); setName(r.group); }} />
-                <Popconfirm
-                  title={`Xoá nhóm "${r.group}"?`}
-                  description={`${r.total} page sẽ về "Chưa có nhóm". Page không bị xoá.`}
-                  onConfirm={() => rename(r.group, null)}
-                >
-                  <Button type="text" size="small" danger icon={<DeleteOutlined />} />
-                </Popconfirm>
-              </Space>
-            ),
-          },
-        ]}
-      />
-    </Modal>
-  );
-}
 export default function Pages() {
   const { message } = App.useApp();
   const { data = [], loading, reload } = useApi('/pages');
@@ -364,6 +271,8 @@ export default function Pages() {
       )}
       {showGroups && (
         <GroupManagerModal
+          showEnabled
+          help='Sau khi tạo nhóm: tick chọn page ở bảng bên ngoài, rồi chọn nhóm ở ô "Chuyển vào nhóm". Mỗi page thuộc tối đa 1 nhóm.'
           groups={groupList}
           onClose={() => setShowGroups(false)}
           onChanged={() => { setGroupFilter(''); reload({ silent: true }); reloadGroups({ silent: true }); }}
