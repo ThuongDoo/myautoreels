@@ -156,8 +156,6 @@ const DEFAULTS = {
   stats_days: '7',
   viral_multiplier: '3',
   viral_min_views: '1000',
-  telegram_bot_token: '',
-  telegram_chat_id: '',
 };
 export const SETTING_KEYS = Object.keys(DEFAULTS);
 

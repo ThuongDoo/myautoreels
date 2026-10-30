@@ -1,7 +1,6 @@
 import { db, getSetting } from './db.js';
 import * as fb from './fb.js';
 import { ensureLocal, releaseLocal } from './drive.js';
-import { notify } from './telegram.js';
 
 const TICK_MS = 15_000;
 const MAX_ATTEMPTS = 3;
@@ -28,7 +27,6 @@ function fail(job, err, retryStatus) {
     setJob(job.id, { status: retryStatus, attempts, error, next_try_at: Date.now() + attempts * 2 * 60_000 });
   } else {
     setJob(job.id, { status: 'failed', attempts, error, next_try_at: null });
-    notify(`❌ Đăng reel thất bại\nPage: ${job.page_name}\nVideo: ${job.drive_file_name}\nLỗi: ${error}`);
   }
 }
 
@@ -69,7 +67,6 @@ async function checkProcessing(job) {
     if (status?.video_status === 'error' || errPhase) {
       const error = (errPhase?.errors || []).map((e) => e.message).join('; ') || 'Facebook báo lỗi xử lý video';
       setJob(job.id, { status: 'failed', error, next_try_at: null });
-      notify(`❌ Facebook từ chối reel\nPage: ${job.page_name}\nVideo: ${job.drive_file_name}\nLỗi: ${error}`);
     } else if (status?.publishing_phase?.status === 'complete') {
       setJob(job.id, { status: 'done', error: null, next_try_at: null });
       db.prepare(`

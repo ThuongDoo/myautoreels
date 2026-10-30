@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import {
+  Button,
   Card,
   Col,
   DatePicker,
@@ -37,6 +38,7 @@ const C = {
 };
 const NO_GROUP_LABEL = "Chưa có nhóm";
 const MATURE_MS = 24 * 3_600_000;
+const TOP_PAGES_COLLAPSED = 10;
 
 const compact = (v) => {
   const n = Math.abs(v);
@@ -100,7 +102,13 @@ function TooltipBox({ active, payload, render }) {
   );
 }
 
-function ChartCard({ title, subtitle, extra, height = 260, empty, children }) {
+// maxHeight: taller charts scroll inside the card instead of stretching the row.
+function ChartCard({ title, subtitle, extra, height = 260, maxHeight, footer, empty, children }) {
+  const chart = (
+    <ResponsiveContainer width="100%" height={height}>
+      {children}
+    </ResponsiveContainer>
+  );
   return (
     <Card size="small" title={title} extra={extra} style={{ height: "100%" }}>
       {subtitle && (
@@ -117,11 +125,12 @@ function ChartCard({ title, subtitle, extra, height = 260, empty, children }) {
           description="Chưa có dữ liệu"
           style={{ height: height - 40 }}
         />
+      ) : maxHeight && height > maxHeight ? (
+        <div style={{ maxHeight, overflowY: "auto", overflowX: "hidden" }}>{chart}</div>
       ) : (
-        <ResponsiveContainer width="100%" height={height}>
-          {children}
-        </ResponsiveContainer>
+        chart
       )}
+      {footer}
     </Card>
   );
 }
@@ -348,6 +357,10 @@ export default function ReelCharts({ reels, days, query, onOpenPage }) {
       .filter((p) => p.value > 0 || !topFrom)
       .sort((a, b) => b.value - a.value);
   }, [reels, topGains, !topFrom, metricKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Top N by default so this card stays level with the group chart beside it.
+  const [showAllPages, setShowAllPages] = useState(false);
+  const shownPages = showAllPages ? topPages : topPages.slice(0, TOP_PAGES_COLLAPSED);
+  const hiddenPages = topPages.slice(TOP_PAGES_COLLAPSED);
 
   // Average views by local publish hour. Reels younger than 24h are left out when there are
   // enough older ones — they haven't had time to collect views and would drag their hour down.
@@ -620,11 +633,23 @@ export default function ReelCharts({ reels, days, query, onOpenPage }) {
                 />
               </Space>
             }
-            height={Math.max(160, topPages.length * 32 + 40)}
+            height={Math.max(160, shownPages.length * 32 + 40)}
+            maxHeight={TOP_PAGES_COLLAPSED * 32 + 40}
             empty={!topPages.length}
+            footer={
+              hiddenPages.length > 0 && (
+                <div style={{ textAlign: "center", marginTop: 4 }}>
+                  <Button size="small" type="link" onClick={() => setShowAllPages((v) => !v)}>
+                    {showAllPages
+                      ? `Thu gọn về top ${TOP_PAGES_COLLAPSED}`
+                      : `Xem tất cả ${topPages.length} page (còn ${hiddenPages.length} page · ${compact(hiddenPages.reduce((s, p) => s + p.value, 0))} ${unit})`}
+                  </Button>
+                </div>
+              )
+            }
           >
             <BarChart
-              data={topPages}
+              data={shownPages}
               layout="vertical"
               margin={{ top: 0, right: 56, left: 0, bottom: 0 }}
               barCategoryGap={6}

@@ -6,7 +6,6 @@ import { DATA_DIR, db, getAllSettings, getSetting, setSetting, SETTING_KEYS, tra
 import * as fb from './fb.js';
 import { listAudioRecursive, listFolder, listVideosRecursive, parseFolderId, serviceAccountEmail, streamFile } from './drive.js';
 import { refreshStats, isStatsRunning } from './stats.js';
-import { notify } from './telegram.js';
 import { renderCaption } from './caption.js';
 import { listBackups, prepareRestore } from './backups.js';
 import { spawn } from 'node:child_process';
@@ -86,11 +85,6 @@ export function registerRoutes(app) {
       restoring = false;
       throw bad(`Không khôi phục được: ${e.message}`);
     }
-  });
-
-  app.post('/api/telegram/test', async () => {
-    await notify('✅ AutoReels đã kết nối Telegram', { throwOnError: true });
-    return { ok: true };
   });
 
   // --- Caption templates (saving with an existing name overwrites it) ---

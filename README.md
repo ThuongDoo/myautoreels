@@ -47,9 +47,6 @@ Nhiều BM: lặp lại các bước trên cho từng BM (mỗi BM một app, Sy
 4. Share thư mục video trên Drive cho email service account hiện ra (quyền Người xem).
 5. Dán link thư mục vào ô "Thư mục video mặc định".
 
-### 3. Telegram (tuỳ chọn)
-Tạo bot qua @BotFather, lấy chat ID qua @userinfobot, dán vào Cài đặt → bấm "Gửi thử".
-
 ## Cách hoạt động
 
 | Trạng thái | Ý nghĩa |

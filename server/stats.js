@@ -1,6 +1,5 @@
 import { db, getSetting, setSetting, transaction } from './db.js';
 import * as fb from './fb.js';
-import { notify } from './telegram.js';
 
 const PAGE_CONCURRENCY = 3;
 let running = false;
@@ -26,7 +25,7 @@ const median = (arr) => {
 function computeViral(page) {
   const multiplier = Number(getSetting('viral_multiplier'));
   const minViews = Number(getSetting('viral_min_views'));
-  const rows = db.prepare('SELECT video_id, views, viral, published_at, permalink FROM reels WHERE page_id = ? ORDER BY published_at DESC LIMIT 60')
+  const rows = db.prepare('SELECT video_id, views, published_at FROM reels WHERE page_id = ? ORDER BY published_at DESC LIMIT 60')
     .all(page.id);
   const dayAgo = Date.now() - 86_400_000;
   const update = db.prepare('UPDATE reels SET viral_score = ?, viral = ? WHERE video_id = ?');
@@ -39,9 +38,6 @@ function computeViral(page) {
     const score = base > 0 ? r.views / base : null;
     const viral = r.views >= minViews && (score == null ? r.views >= minViews * multiplier : score >= multiplier) ? 1 : 0;
     update.run(score, viral, r.video_id);
-    if (viral && !r.viral) {
-      notify(`🔥 Reel đang viral!\nPage: ${page.name}\nViews: ${r.views.toLocaleString('vi-VN')}${score ? ` (x${score.toFixed(1)} so với trung bình)` : ''}\n${r.permalink}`);
-    }
   }
 }
 

@@ -54,7 +54,7 @@ for (let attempt = 1; ; attempt++) {
 console.log(`AutoReels chạy tại http://${host === '0.0.0.0' ? 'localhost' : host}:${port}`);
 
 // DISABLE_WORKER=1 (e.g. a local copy of the VPS data) never posts reels and skips the
-// automatic stats refresh, so two machines don't publish or notify twice.
+// automatic stats refresh, so two machines don't publish twice.
 if (process.env.DISABLE_WORKER === '1') {
   console.warn('⏸  DISABLE_WORKER=1: không đăng bài, không tự cập nhật số liệu');
 } else {

@@ -34,16 +34,6 @@ export default function Settings() {
     }
   };
 
-  const testTelegram = async () => {
-    try {
-      await api.put('/settings', form.getFieldsValue(['telegram_bot_token', 'telegram_chat_id']));
-      await api.post('/telegram/test');
-      message.success('Đã gửi tin nhắn thử');
-    } catch (e) {
-      message.error(e.message);
-    }
-  };
-
   return (
     <Form form={form} layout="vertical" onFinish={save} style={{ maxWidth: 1100 }}>
       <Row gutter={[16, 16]}>
@@ -104,23 +94,6 @@ export default function Settings() {
               </Form.Item>
               <Form.Item label="Và tối thiểu" name="viral_min_views"><InputNumber min={0} addonAfter="views" /></Form.Item>
             </Space>
-          </Card>
-        </Col>
-
-        <Col xs={24}>
-          <Card title="Thông báo Telegram">
-            <Row gutter={16}>
-              <Col xs={24} md={10}>
-                <Form.Item label="Bot token" name="telegram_bot_token"><Input.Password /></Form.Item>
-              </Col>
-              <Col xs={24} md={8}>
-                <Form.Item label="Chat ID" name="telegram_chat_id"><Input /></Form.Item>
-              </Col>
-              <Col xs={24} md={6}>
-                <Form.Item label=" "><Button onClick={testTelegram}>Gửi thử</Button></Form.Item>
-              </Col>
-            </Row>
-            <Typography.Text type="secondary">Nhận thông báo khi đăng lỗi hoặc có reel viral.</Typography.Text>
           </Card>
         </Col>
       </Row>
