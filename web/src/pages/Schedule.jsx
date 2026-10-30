@@ -30,6 +30,8 @@ function parseSlot(s) {
 const normalizeSlots = (list = []) => [...new Set(list.map(parseSlot).filter(Boolean))].sort();
 
 // Posting times in the browser's timezone: daily slots from startDate, or evenly spaced from startAt.
+const SPARE_SLOTS = 500;
+
 function buildSlotTimes(v, count) {
   if (count <= 0) return [];
   if (v.timing === 'interval') {
@@ -494,7 +496,8 @@ export default function Schedule() {
         pageIds: v.pageIds,
         mode: v.mode,
         shuffle: v.shuffle,
-        slotTimes,
+        // Spare slots so the server can skip slots where a page already has a post.
+        slotTimes: buildSlotTimes(values, perPage + SPARE_SLOTS),
         gapMinSec: v.gapMinSec,
         gapMaxSec: v.gapMaxSec,
         captionTemplate: v.captionTemplate,
@@ -502,6 +505,7 @@ export default function Schedule() {
       message.success(
         <>
           Đã tạo {r.created} lịch đăng, từ {dayjs(r.firstAt).format('DD/MM HH:mm')} đến {dayjs(r.lastAt).format('DD/MM HH:mm')}.{' '}
+          {r.skipped > 0 && `Bỏ qua ${r.skipped} khung giờ page đã có lịch. `}
           <a href="#queue">Xem hàng đợi →</a>
         </>,
         6,

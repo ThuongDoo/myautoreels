@@ -517,16 +517,48 @@ export function registerRoutes(app) {
     const pages = pageIds.map((id) => db.prepare('SELECT id, name FROM pages WHERE id = ?').get(id)).filter(Boolean);
     if (!pages.length) throw bad('Không tìm thấy page nào, hãy đồng bộ lại');
 
+    // A slot runs until the next one starts; a page that already has an active job inside
+    // a slot skips it and takes its next free slot instead.
+    const times = slotTimes.map(Number);
+    const slotOf = (at) => {
+      let lo = 0;
+      let hi = times.length - 1;
+      if (at < times[0]) return -1;
+      while (lo < hi) {
+        const mid = Math.ceil((lo + hi) / 2);
+        if (times[mid] <= at) lo = mid; else hi = mid - 1;
+      }
+      return lo;
+    };
+    const busy = new Map(pages.map((p) => [p.id, new Set()]));
+    const existing = db.prepare(`
+      SELECT page_id, scheduled_at FROM jobs
+      WHERE page_id IN (${pages.map(() => '?').join(',')}) AND scheduled_at >= ? AND status NOT IN ('canceled', 'failed')
+    `).all(...pages.map((p) => p.id), times[0]);
+    for (const j of existing) busy.get(j.page_id).add(slotOf(j.scheduled_at));
+
+    const cursor = new Map();
+    let skipped = 0;
+    const nextSlot = (pageId) => {
+      let i = cursor.get(pageId) ?? 0;
+      while (busy.get(pageId).has(i)) { i++; skipped++; }
+      cursor.set(pageId, i + 1);
+      return i;
+    };
+
     const order = (list) => (shuffle ? shuffled(list) : list);
     const plan = [];
     if (mode === 'split') {
-      order(videos).forEach((video, i) => plan.push({ page: pages[i % pages.length], video, slot: Math.floor(i / pages.length) }));
+      order(videos).forEach((video, i) => {
+        const page = pages[i % pages.length];
+        plan.push({ page, video, slot: nextSlot(page.id) });
+      });
     } else {
       // Separate order per page so pages don't post the same video in the same slot.
-      for (const page of pages) order(videos).forEach((video, slot) => plan.push({ page, video, slot }));
+      for (const page of pages) order(videos).forEach((video) => plan.push({ page, video, slot: nextSlot(page.id) }));
     }
     const slotsNeeded = Math.max(...plan.map((p) => p.slot)) + 1;
-    if (slotsNeeded > slotTimes.length) throw bad(`Cần ${slotsNeeded} khung giờ nhưng chỉ có ${slotTimes.length}`);
+    if (slotsNeeded > times.length) throw bad(`Cần ${slotsNeeded} khung giờ nhưng chỉ có ${times.length}`);
 
     const lo = Math.max(0, Math.min(gapMinSec, gapMaxSec)) * 1000;
     const hi = Math.max(gapMinSec, gapMaxSec) * 1000;
@@ -535,7 +567,7 @@ export function registerRoutes(app) {
       let offset = 0;
       shuffled(entries).forEach((entry, i) => {
         if (i > 0) offset += lo + Math.random() * (hi - lo);
-        entry.at = Number(slotTimes[slot]) + Math.round(offset);
+        entry.at = times[slot] + Math.round(offset);
       });
     }
 
@@ -550,8 +582,8 @@ export function registerRoutes(app) {
         insert.run(page.id, video.id, video.name, caption, at, now, now);
       }
     });
-    const times = plan.map((p) => p.at);
-    return { created: plan.length, firstAt: Math.min(...times), lastAt: Math.max(...times) };
+    const planned = plan.map((p) => p.at);
+    return { created: plan.length, skipped, firstAt: Math.min(...planned), lastAt: Math.max(...planned) };
   });
 
   app.patch('/api/jobs/:id', async (req) => {
