@@ -60,3 +60,23 @@ export function groupColor(name) {
 export const fmtNum =(n) => (n == null ? '-' : Number(n).toLocaleString('vi-VN'));
 export const fmtSize = (b) => (b > 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${(b / 1e6).toFixed(1)} MB`);
 export const fmtSec = (ms) => (ms ? `${(ms / 1000).toFixed(1)}s` : '-');
+
+// Video files are named "<group>_<number>_<music code>...", e.g. "comnha_015_N23.mp4".
+export function parseVideoName(name) {
+  const parts = (name || '').replace(/\.[^.]+$/, '').split('_').map((s) => s.trim());
+  return {
+    group: parts[0] || null,
+    index: parts.length > 1 ? parts[1] : null,
+    music: parts.length > 2 && parts[2] ? parts[2] : null,
+  };
+}
+
+// A music file belongs to a code when its name is the code, or starts with it followed by
+// a separator: "N23.mp3", "N23_ten bai.mp3", "N23 - ten bai.m4a".
+export function musicFileFor(code, files) {
+  const c = code.toLowerCase();
+  return files.find((f) => {
+    const base = f.name.replace(/\.[^.]+$/, '').toLowerCase();
+    return base === c || (base.startsWith(c) && /[\s_.-]/.test(base[c.length]));
+  });
+}

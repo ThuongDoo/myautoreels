@@ -126,6 +126,26 @@ function ChartCard({ title, subtitle, extra, height = 260, empty, children }) {
   );
 }
 
+// Page names on the "by page" chart are links that open the page's detail drawer.
+function PageTick({ x, y, payload, pages, onOpen }) {
+  const name = pages.find((p) => p.id === payload.value)?.name || payload.value;
+  return (
+    <text
+      x={x}
+      y={y}
+      dy={4}
+      textAnchor="end"
+      fontSize={12}
+      fill={C.series}
+      style={{ cursor: "pointer" }}
+      onClick={() => onOpen?.(payload.value)}
+    >
+      <title>{name}</title>
+      {name.length > 20 ? `${name.slice(0, 19)}…` : name}
+    </text>
+  );
+}
+
 // Labels take the chosen metric's name, e.g. "Tổng like".
 const GROUP_METRICS = {
   total: {
@@ -183,7 +203,7 @@ const TOP_RANGES = {
   custom: { label: "Tùy chọn…" },
 };
 
-export default function ReelCharts({ reels, days, query }) {
+export default function ReelCharts({ reels, days, query, onOpenPage }) {
   const [metricKey, setMetricKey] = useState("views");
   const M = METRICS[metricKey];
   const unit = M.label.toLowerCase();
@@ -303,18 +323,25 @@ export default function ReelCharts({ reels, days, query }) {
     const map = new Map();
     if (!topFrom) {
       for (const r of reels) {
-        const name = r.page_name || r.page_id;
-        const p = map.get(name) || { name, value: 0, count: 0 };
+        const p = map.get(r.page_id) || {
+          id: r.page_id,
+          name: r.page_name || r.page_id,
+          value: 0,
+          count: 0,
+        };
         p.value += M.reel(r);
         p.count++;
-        map.set(name, p);
+        map.set(r.page_id, p);
       }
     } else {
       for (const g of topGains) {
-        const name = g.page_name || g.page_id;
-        const p = map.get(name) || { name, value: 0 };
+        const p = map.get(g.page_id) || {
+          id: g.page_id,
+          name: g.page_name || g.page_id,
+          value: 0,
+        };
         p.value += M.gain(g);
-        map.set(name, p);
+        map.set(g.page_id, p);
       }
     }
     return [...map.values()]
@@ -606,13 +633,10 @@ export default function ReelCharts({ reels, days, query }) {
               <XAxis type="number" {...xAxis} tickFormatter={compact} />
               <YAxis
                 type="category"
-                dataKey="name"
+                dataKey="id"
                 {...yAxis}
                 width={140}
-                tick={{ fontSize: 12, fill: "#52514e" }}
-                tickFormatter={(n) =>
-                  n.length > 20 ? `${n.slice(0, 19)}…` : n
-                }
+                tick={<PageTick pages={topPages} onOpen={onOpenPage} />}
               />
               <Tooltip
                 cursor={{ fill: "rgba(11,11,11,0.04)" }}
@@ -640,6 +664,8 @@ export default function ReelCharts({ reels, days, query }) {
                 fill={C.series}
                 radius={[0, 4, 4, 0]}
                 maxBarSize={20}
+                style={{ cursor: "pointer" }}
+                onClick={(d) => onOpenPage?.((d.payload ?? d).id)}
                 label={{
                   position: "right",
                   fontSize: 11,

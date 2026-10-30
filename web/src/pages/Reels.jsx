@@ -2,12 +2,16 @@ import { useState } from 'react';
 import {
   App, Button, Card, Col, Drawer, Empty, Input, Row, Segmented, Select, Space, Statistic, Switch, Table, Tag, Typography,
 } from 'antd';
-import { BarChartOutlined, FireOutlined, ReloadOutlined, UnorderedListOutlined } from '@ant-design/icons';
+import {
+  BarChartOutlined, CustomerServiceOutlined, FireOutlined, ReloadOutlined, UnorderedListOutlined,
+} from '@ant-design/icons';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip as ChartTooltip, XAxis, YAxis } from 'recharts';
 import dayjs from 'dayjs';
 import { api, fmtNum, fmtSec, groupColor, useApi } from '../api.js';
 import ReelCharts from './ReelCharts.jsx';
 import VideoDrawer from './VideoDrawer.jsx';
+import PageDrawer from './PageDrawer.jsx';
+import MusicStats from './MusicStats.jsx';
 
 const viewsPerHour = (r) => r.views / Math.max(1, (Date.now() - r.published_at) / 3_600_000);
 
@@ -79,6 +83,7 @@ export default function Reels() {
   const [q, setQ] = useState('');
   const [open, setOpen] = useState(null);
   const [openVideo, setOpenVideo] = useState(null);
+  const [openPage, setOpenPage] = useState(null);
 
   const { data: pages = [] } = useApi('/pages');
   const { data: groups = [] } = useApi('/groups');
@@ -139,6 +144,7 @@ export default function Reels() {
             options={[
               { value: 'charts', label: 'Biểu đồ', icon: <BarChartOutlined /> },
               { value: 'list', label: 'Danh sách reel', icon: <UnorderedListOutlined /> },
+              { value: 'music', label: 'Nhạc', icon: <CustomerServiceOutlined /> },
             ]}
           />
           <Segmented
@@ -176,9 +182,9 @@ export default function Reels() {
           <Button type="text" icon={<ReloadOutlined />} onClick={() => reload()} />
         </Space>
 
-        {tab === 'charts' ? (
-          <ReelCharts reels={data} days={days} query={query} />
-        ) : (
+        {tab === 'charts' && <ReelCharts reels={data} days={days} query={query} onOpenPage={setOpenPage} />}
+        {tab === 'music' && <MusicStats reels={data} days={days} onOpenReel={setOpen} />}
+        {tab === 'list' && (
         <Table
           rowKey="video_id"
           size="middle"
@@ -244,6 +250,7 @@ export default function Reels() {
         />
         )}
       </Card>
+      {openPage && <PageDrawer pageId={openPage} reels={data} days={days} onClose={() => setOpenPage(null)} onOpenReel={setOpen} />}
       {open && <HistoryDrawer reel={open} onClose={() => setOpen(null)} onOpenVideo={setOpenVideo} />}
       {openVideo && <VideoDrawer video={openVideo} onClose={() => setOpenVideo(null)} />}
     </Space>

@@ -130,6 +130,7 @@ const DEFAULTS = {
   graph_version: 'v23.0',
   google_sa_json: '',
   drive_folder_id: '',
+  music_folder_id: '',
   time_slots: '07:00,11:00,20:00',
   upload_concurrency: '4',
   preupload_minutes: '10',

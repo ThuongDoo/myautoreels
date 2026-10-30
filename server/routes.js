@@ -4,7 +4,7 @@ import path from 'node:path';
 import { createTask, runTask } from './tasks.js';
 import { DATA_DIR, db, getAllSettings, getSetting, setSetting, SETTING_KEYS, transaction } from './db.js';
 import * as fb from './fb.js';
-import { listFolder, listVideosRecursive, parseFolderId, serviceAccountEmail, streamFile } from './drive.js';
+import { listAudioRecursive, listFolder, listVideosRecursive, parseFolderId, serviceAccountEmail, streamFile } from './drive.js';
 import { refreshStats, isStatsRunning } from './stats.js';
 import { notify } from './telegram.js';
 import { renderCaption } from './caption.js';
@@ -41,6 +41,7 @@ export function registerRoutes(app) {
       }
     }
     if (body.drive_folder_id) body.drive_folder_id = parseFolderId(body.drive_folder_id);
+    if (body.music_folder_id) body.music_folder_id = parseFolderId(body.music_folder_id);
     for (const [k, v] of Object.entries(body)) if (SETTING_KEYS.includes(k)) setSetting(k, v);
     return { ok: true };
   });
@@ -77,6 +78,30 @@ export function registerRoutes(app) {
     FROM pages p LEFT JOIN fb_accounts a ON a.id = p.account_id
     ORDER BY p.name
   `).all());
+
+  // Everything the page detail drawer needs beyond the reels already loaded for the chosen period.
+  app.get('/api/pages/:id/summary', async (req) => {
+    const page = db.prepare(`
+      SELECT p.id, p.name, p.picture, p.enabled, p.group_name, a.name AS account_name
+      FROM pages p LEFT JOIN fb_accounts a ON a.id = p.account_id WHERE p.id = ?
+    `).get(req.params.id);
+    if (!page) throw bad('Không tìm thấy page', 404);
+    const totals = db.prepare(`
+      SELECT COUNT(*) AS reels, COALESCE(SUM(views), 0) AS views, MIN(published_at) AS first_at, MAX(published_at) AS last_at
+      FROM reels WHERE page_id = ?
+    `).get(page.id);
+    const jobs = db.prepare(`
+      SELECT COUNT(*) FILTER (WHERE status IN ('pending', 'uploading', 'uploaded', 'publishing', 'processing')) AS upcoming,
+             COUNT(*) FILTER (WHERE status = 'failed') AS failed
+      FROM jobs WHERE page_id = ?
+    `).get(page.id);
+    const next = db.prepare(`
+      SELECT id, scheduled_at, status, drive_file_name FROM jobs
+      WHERE page_id = ? AND status IN ('pending', 'uploading', 'uploaded', 'publishing', 'processing')
+      ORDER BY scheduled_at LIMIT 10
+    `).all(page.id);
+    return { page, totals, jobs, next };
+  });
 
   // --- Facebook accounts (one per Business Manager) ---
   const getAccount = (id) => {
@@ -378,6 +403,17 @@ export function registerRoutes(app) {
     const folderId = parseFolderId(req.query.folderId);
     if (!folderId) throw bad('Thiếu folderId');
     return { videos: withUsage(await listVideosRecursive(folderId, req.query.name || '')) };
+  });
+
+  // Music files from the music folder, cached for a few minutes since the stats page polls.
+  let musicCache = { key: null, at: 0, files: null };
+  app.get('/api/music', async (req) => {
+    const folderId = getSetting('music_folder_id');
+    if (!folderId) return { configured: false, files: [] };
+    if (req.query.fresh || musicCache.key !== folderId || Date.now() - musicCache.at > 10 * 60_000) {
+      musicCache = { key: folderId, at: Date.now(), files: await listAudioRecursive(folderId) };
+    }
+    return { configured: true, files: musicCache.files };
   });
 
   app.get('/api/drive/stream/:fileId', async (req, reply) => {

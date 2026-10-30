@@ -69,6 +69,13 @@ export default function Settings() {
             <Form.Item label="Thư mục video mặc định" name="drive_folder_id">
               <Input placeholder="Link hoặc ID thư mục Drive" />
             </Form.Item>
+            <Form.Item
+              label="Thư mục nhạc"
+              name="music_folder_id"
+              extra="Tên file nhạc bắt đầu bằng mã nhạc trong tên video (vd. N23.mp3 hoặc N23_ten bai.mp3). Share thư mục cho email ở trên."
+            >
+              <Input placeholder="Link hoặc ID thư mục Drive chứa nhạc" />
+            </Form.Item>
           </Card>
         </Col>
 
