@@ -206,7 +206,12 @@ export default function MusicStats({ reels, days, onOpenReel }) {
               dataIndex: 'code',
               width: 110,
               fixed: 'left',
-              render: (c) => (c === UNKNOWN ? <Typography.Text type="secondary">{c}</Typography.Text> : <Typography.Text strong>{c}</Typography.Text>),
+              render: (c, m) => (c === UNKNOWN ? <Typography.Text type="secondary">{c}</Typography.Text> : (
+                <>
+                  <Typography.Text strong>{c}</Typography.Text>
+                  {m.file?.folder && <div><Typography.Text type="secondary" style={{ fontSize: 12 }}>{m.file.folder}</Typography.Text></div>}
+                </>
+              )),
             },
             {
               title: 'Nghe nhạc',
