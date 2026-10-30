@@ -44,5 +44,11 @@ if (!password && !['127.0.0.1', 'localhost'].includes(host)) {
 await app.listen({ host, port });
 console.log(`AutoReels chạy tại http://${host === '0.0.0.0' ? 'localhost' : host}:${port}`);
 
-startWorker();
-startStatsScheduler();
+// DISABLE_WORKER=1 (e.g. a local copy of the VPS data) never posts reels and skips the
+// automatic stats refresh, so two machines don't publish or notify twice.
+if (process.env.DISABLE_WORKER === '1') {
+  console.warn('⏸  DISABLE_WORKER=1: không đăng bài, không tự cập nhật số liệu');
+} else {
+  startWorker();
+  startStatsScheduler();
+}

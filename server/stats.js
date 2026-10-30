@@ -47,9 +47,13 @@ function computeViral(page) {
 
 async function refreshPage(page, since) {
   const list = await fb.listPageReels(page.id, page.access_token, Math.floor(since / 1000));
+  // job_id is looked up by video_id so a reel the app posted stays linked to its source video
+  // even if the worker didn't record it (e.g. it restarted mid-publish).
   const upsert = db.prepare(`
-    INSERT INTO reels (video_id, page_id, caption, permalink, published_at) VALUES (?, ?, ?, ?, ?)
-    ON CONFLICT(video_id) DO UPDATE SET permalink = excluded.permalink, caption = COALESCE(reels.caption, excluded.caption)
+    INSERT INTO reels (video_id, page_id, caption, permalink, published_at, job_id)
+    VALUES (?1, ?2, ?3, ?4, ?5, (SELECT id FROM jobs WHERE video_id = ?1 ORDER BY id DESC LIMIT 1))
+    ON CONFLICT(video_id) DO UPDATE SET permalink = excluded.permalink, caption = COALESCE(reels.caption, excluded.caption),
+      job_id = COALESCE(reels.job_id, excluded.job_id)
   `);
   const update = db.prepare(`
     UPDATE reels SET views = ?, reach = ?, likes = ?, comments = ?, shares = ?, avg_watch_ms = ?, stats_at = ? WHERE video_id = ?

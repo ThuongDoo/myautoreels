@@ -405,6 +405,46 @@ export function registerRoutes(app) {
     return { videos: withUsage(await listVideosRecursive(folderId, req.query.name || '')) };
   });
 
+  // How many videos in each folder (subfolders included) were already posted, for the picker.
+  // Drive listings are cached briefly; posted/upcoming counts always come fresh from the DB.
+  const folderCache = new Map(); // folderId -> { at, ids }
+  const FOLDER_CACHE_MS = 5 * 60_000;
+  app.get('/api/drive/folder-usage', async (req) => {
+    const ids = String(req.query.ids || '').split(',').filter(Boolean).slice(0, 200);
+    const fileIds = async (id) => {
+      const hit = folderCache.get(id);
+      if (hit && Date.now() - hit.at < FOLDER_CACHE_MS) return hit.ids;
+      const list = (await listVideosRecursive(id)).map((v) => v.id);
+      folderCache.set(id, { at: Date.now(), ids: list });
+      return list;
+    };
+    const usage = db.prepare(`
+      SELECT SUM(status = 'done') > 0 AS posted, SUM(status IN ${ACTIVE}) > 0 AS upcoming
+      FROM jobs WHERE drive_file_id = ?
+    `);
+    const out = {};
+    let next = 0;
+    await Promise.all(Array.from({ length: Math.min(4, ids.length) }, async () => {
+      while (next < ids.length) {
+        const id = ids[next++];
+        try {
+          const files = await fileIds(id);
+          let posted = 0;
+          let upcoming = 0;
+          for (const f of files) {
+            const u = usage.get(f);
+            if (u.posted) posted++;
+            else if (u.upcoming) upcoming++;
+          }
+          out[id] = { total: files.length, posted, upcoming };
+        } catch (e) {
+          out[id] = { error: e.message };
+        }
+      }
+    }));
+    return out;
+  });
+
   // Music files from the music folder, cached for a few minutes since the stats page polls.
   let musicCache = { key: null, at: 0, files: null };
   app.get('/api/music', async (req) => {

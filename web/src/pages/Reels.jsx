@@ -2,16 +2,13 @@ import { useState } from 'react';
 import {
   App, Button, Card, Col, Drawer, Empty, Input, Row, Segmented, Select, Space, Statistic, Switch, Table, Tag, Typography,
 } from 'antd';
-import {
-  BarChartOutlined, CustomerServiceOutlined, FireOutlined, ReloadOutlined, UnorderedListOutlined,
-} from '@ant-design/icons';
+import { BarChartOutlined, FireOutlined, ReloadOutlined, UnorderedListOutlined } from '@ant-design/icons';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip as ChartTooltip, XAxis, YAxis } from 'recharts';
 import dayjs from 'dayjs';
 import { api, fmtNum, fmtSec, groupColor, useApi } from '../api.js';
 import ReelCharts from './ReelCharts.jsx';
 import VideoDrawer from './VideoDrawer.jsx';
 import PageDrawer from './PageDrawer.jsx';
-import MusicStats from './MusicStats.jsx';
 
 const viewsPerHour = (r) => r.views / Math.max(1, (Date.now() - r.published_at) / 3_600_000);
 
@@ -22,7 +19,7 @@ const HISTORY_METRICS = {
   shares: { label: 'Share' },
 };
 
-function HistoryDrawer({ reel, onClose, onOpenVideo }) {
+export function HistoryDrawer({ reel, onClose, onOpenVideo }) {
   const [metric, setMetric] = useState('views');
   const { data = [], loading } = useApi(`/reels/${reel.video_id}/history`);
   const points = data.map((d) => ({ ...d, time: dayjs(d.ts).format('DD/MM HH:mm') }));
@@ -144,7 +141,6 @@ export default function Reels() {
             options={[
               { value: 'charts', label: 'Biểu đồ', icon: <BarChartOutlined /> },
               { value: 'list', label: 'Danh sách reel', icon: <UnorderedListOutlined /> },
-              { value: 'music', label: 'Nhạc', icon: <CustomerServiceOutlined /> },
             ]}
           />
           <Segmented
@@ -183,7 +179,6 @@ export default function Reels() {
         </Space>
 
         {tab === 'charts' && <ReelCharts reels={data} days={days} query={query} onOpenPage={setOpenPage} />}
-        {tab === 'music' && <MusicStats reels={data} days={days} onOpenReel={setOpen} />}
         {tab === 'list' && (
         <Table
           rowKey="video_id"
@@ -219,11 +214,16 @@ export default function Reels() {
               ) : <Typography.Text type="secondary">—</Typography.Text>),
             },
             {
-              title: 'Đăng',
+              title: 'Đăng lúc',
               dataIndex: 'published_at',
-              width: 120,
+              width: 130,
               sorter: (a, b) => a.published_at - b.published_at,
-              render: (t) => dayjs(t).fromNow(),
+              render: (t) => (
+                <>
+                  <div>{dayjs(t).format('DD/MM/YYYY HH:mm')}</div>
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>{dayjs(t).fromNow()}</Typography.Text>
+                </>
+              ),
             },
             { title: 'Views', dataIndex: 'views', width: 100, align: 'right', sorter: (a, b) => a.views - b.views, defaultSortOrder: 'descend', render: fmtNum },
             {

@@ -231,12 +231,37 @@ function CaptionHelper({ template, onInsert, sampleVideo, samplePages }) {
 
 const fmtMinutes =(m) => (m >= 60 ? `${Math.floor(m / 60)} giờ ${Math.round(m % 60)} phút` : `${Math.round(m)} phút`);
 
+// "Đã đăng 12/40" next to a folder: videos (subfolders included) with at least one done post.
+function FolderUsage({ u }) {
+  if (!u) return <Spin size="small" />;
+  if (u.error || !u.total) return null;
+  const all = u.posted === u.total;
+  return (
+    <>
+      <Tag color={all ? 'green' : u.posted ? 'lime' : 'default'} style={{ margin: 0 }}>
+        Đã đăng {u.posted}/{u.total}
+      </Tag>
+      {u.upcoming > 0 && <Tag color="blue" style={{ margin: 0 }}>Sắp đăng {u.upcoming}</Tag>}
+    </>
+  );
+}
+
 function DriveBrowser({ selectedKeys, onSelect, videoCache, folderNames, folders }) {
   const { message } = App.useApp();
   const [stack, setStack] = useState([]);
   const [data, setData] = useState({ folders: [], videos: [] });
   const [loading, setLoading] = useState(false);
   const [link, setLink] = useState(() => storage.get(ROOT_KEY) || '');
+  // folderId -> { total, posted, upcoming } for the subfolders on screen; loaded after the listing.
+  const [usage, setUsage] = useState({});
+
+  const loadUsage = async (list) => {
+    if (!list.length) return;
+    try {
+      const res = await api.get(`/drive/folder-usage?ids=${list.map((f) => f.id).join(',')}`);
+      setUsage((u) => ({ ...u, ...res }));
+    } catch { /* counts are optional */ }
+  };
 
   const open = async (folderId, name, replaceStack) => {
     setLoading(true);
@@ -245,6 +270,7 @@ function DriveBrowser({ selectedKeys, onSelect, videoCache, folderNames, folders
       res.videos.forEach((v) => { videoCache.current[v.id] = v; });
       res.folders.forEach((f) => { folderNames.current[f.id] = f.name; });
       setData(res);
+      loadUsage(res.folders);
       setStack((s) => (replaceStack ? [{ id: res.folderId, name }] : [...s, { id: res.folderId, name }]));
       return true;
     } catch (e) {
@@ -323,6 +349,7 @@ function DriveBrowser({ selectedKeys, onSelect, videoCache, folderNames, folders
                 {r.isFolder ? <FolderOutlined style={{ color: '#f5a623' }} /> : <VideoCameraOutlined />}
                 {name}
                 {r.isFolder && <RightOutlined style={{ fontSize: 10, color: '#999' }} />}
+                {r.isFolder && <FolderUsage u={usage[r.id]} />}
                 {r.posted > 0 && <Tag color="green" style={{ margin: 0 }}>Đã đăng {r.posted}</Tag>}
                 {r.upcoming > 0 && <Tag color="blue" style={{ margin: 0 }}>Sắp đăng {r.upcoming}</Tag>}
               </Space>

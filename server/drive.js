@@ -42,14 +42,15 @@ export function parseFolderId(input) {
   return m ? m[1] : String(input).trim();
 }
 
-// `kind` is the MIME prefix of the files to return: 'video' or 'audio'.
-export async function listFolder(folderId, kind = 'video') {
+// `kinds` are the MIME prefixes of the files to return, e.g. ['video'] or ['audio', 'video'].
+export async function listFolder(folderId, kinds = ['video']) {
   const d = client();
   const items = [];
+  const mime = kinds.map((k) => `mimeType contains '${k}/'`).join(' or ');
   let pageToken;
   do {
     const { data } = await d.files.list({
-      q: `'${folderId.replace(/'/g, "\\'")}' in parents and trashed = false and (mimeType = '${FOLDER_MIME}' or mimeType contains '${kind}/')`,
+      q: `'${folderId.replace(/'/g, "\\'")}' in parents and trashed = false and (mimeType = '${FOLDER_MIME}' or ${mime})`,
       fields: 'nextPageToken, files(id,name,mimeType,size,createdTime,videoMediaMetadata(durationMillis,width,height))',
       orderBy: 'folder,name',
       pageSize: 1000,
@@ -89,9 +90,10 @@ export async function listVideosRecursive(folderId, folderName = '', depth = 0) 
   return out;
 }
 
-// All audio files inside the music folder and its subfolders.
+// All music files inside the music folder and its subfolders. Some music is kept as .mp4,
+// so video files count too; the browser's <audio> player plays their sound track.
 export async function listAudioRecursive(folderId, folderName = '', depth = 0) {
-  const { folders, videos } = await listFolder(folderId, 'audio');
+  const { folders, videos } = await listFolder(folderId, ['audio', 'video']);
   const out = videos.map(({ id, name, size }) => ({ id, name, size, folder: folderName }));
   if (depth < MAX_DEPTH) {
     for (const f of folders) {

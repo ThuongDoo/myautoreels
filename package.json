@@ -9,7 +9,8 @@
     "dev:web": "npm --prefix web run dev",
     "build": "npm --prefix web run build",
     "start": "node --disable-warning=ExperimentalWarning server/index.js",
-    "postinstall": "npm --prefix web install"
+    "postinstall": "npm --prefix web install",
+    "pull-data": "node --disable-warning=ExperimentalWarning scripts/pull-data.js"
   },
   "dependencies": {
     "@fastify/static": "^10.1.8",

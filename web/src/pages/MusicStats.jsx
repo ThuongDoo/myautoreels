@@ -6,7 +6,7 @@ import { FireOutlined, ReloadOutlined } from '@ant-design/icons';
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import dayjs from 'dayjs';
 import {
-  fmtNum, fmtSec, groupColor, musicCode, musicFileFor, parseVideoName, useApi,
+  fmtNum, fmtSec, groupColor, musicCode, musicFileFor, musicKey, parseVideoName, useApi,
 } from '../api.js';
 
 const UNKNOWN = '(không rõ)';
@@ -27,7 +27,7 @@ function Player({ file }) {
 }
 
 // Reels grouped by the music code in their source video's name (see parseVideoName).
-export default function MusicStats({ reels, days, onOpenReel }) {
+export default function MusicStats({ reels, periodLabel, onOpenReel }) {
   // `fresh` skips the server's cache of the music folder.
   const [fresh, setFresh] = useState(0);
   const { data: music, loading: musicLoading, error: musicError } = useApi(fresh ? `/music?fresh=${fresh}` : '/music');
@@ -39,7 +39,7 @@ export default function MusicStats({ reels, days, onOpenReel }) {
     for (const r of reels) {
       const info = parseVideoName(r.drive_file_name);
       const code = (r.drive_file_name && info.music) || UNKNOWN;
-      const key = code.toLowerCase();
+      const key = musicKey(code);
       const m = map.get(key) || {
         code, views: 0, reels: 0, likes: 0, comments: 0, shares: 0, viral: 0,
         pages: new Set(), groups: new Set(), videos: new Map(), list: [],
@@ -92,7 +92,7 @@ export default function MusicStats({ reels, days, onOpenReel }) {
         {[
           { title: 'Số nhạc đã dùng', value: known.length },
           { title: 'Nhạc trong thư mục', value: music?.configured ? files.length : '-' },
-          { title: `Nhạc chưa dùng (${days} ngày)`, value: music?.configured ? unused.length : '-' },
+          { title: `Nhạc chưa dùng (${periodLabel})`, value: music?.configured ? unused.length : '-' },
           { title: 'Mã nhạc không có file', value: music?.configured ? known.filter((m) => !m.file).length : '-' },
         ].map((s) => (
           <Col flex="1 1 170px" key={s.title}>
@@ -218,7 +218,9 @@ export default function MusicStats({ reels, days, onOpenReel }) {
               key: 'file',
               width: 240,
               render: (_, m) => {
-                if (m.code === UNKNOWN) return <Typography.Text type="secondary">Reel đăng ngoài app hoặc tên video sai mẫu</Typography.Text>;
+                if (m.code === UNKNOWN) {
+                  return <Typography.Text type="secondary">Reel đăng ngoài app (không có video gốc), hoặc tên video không có mã nhạc</Typography.Text>;
+                }
                 if (!music?.configured) return '-';
                 if (!m.file) return <Typography.Text type="warning">Không tìm thấy trong thư mục</Typography.Text>;
                 return <span title={m.file.name}><Player file={m.file} /></span>;
@@ -253,7 +255,7 @@ export default function MusicStats({ reels, days, onOpenReel }) {
           size="small"
           items={[{
             key: 'unused',
-            label: `Nhạc chưa có reel nào trong ${days} ngày qua (${unused.length})`,
+            label: `Nhạc chưa có reel nào ${periodLabel} (${unused.length})`,
             children: (
               <Table
                 rowKey="id"

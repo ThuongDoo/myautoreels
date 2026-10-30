@@ -74,7 +74,10 @@ export function parseVideoName(name) {
 // Music files are named "<code>_<title>.mp3", e.g. "C1_Chỉ có đàn tỳ bà....mp3" → "C1".
 export const musicCode = (fileName) => fileName.replace(/\.[^.]+$/, '').split('_')[0].trim();
 
+// Case and leading zeros don't matter: "M7", "m07" and "M07" are the same music.
+export const musicKey = (code) => code.toLowerCase().replace(/^([^\d]*)0+(?=\d)/, '$1');
+
 export function musicFileFor(code, files) {
-  const c = code.toLowerCase();
-  return files.find((f) => musicCode(f.name).toLowerCase() === c);
+  const c = musicKey(code);
+  return files.find((f) => musicKey(musicCode(f.name)) === c);
 }
