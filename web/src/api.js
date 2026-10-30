@@ -71,12 +71,10 @@ export function parseVideoName(name) {
   };
 }
 
-// A music file belongs to a code when its name is the code, or starts with it followed by
-// a separator: "N23.mp3", "N23_ten bai.mp3", "N23 - ten bai.m4a".
+// Music files are named "<code>_<title>.mp3", e.g. "C1_Chỉ có đàn tỳ bà....mp3" → "C1".
+export const musicCode = (fileName) => fileName.replace(/\.[^.]+$/, '').split('_')[0].trim();
+
 export function musicFileFor(code, files) {
   const c = code.toLowerCase();
-  return files.find((f) => {
-    const base = f.name.replace(/\.[^.]+$/, '').toLowerCase();
-    return base === c || (base.startsWith(c) && /[\s_.-]/.test(base[c.length]));
-  });
+  return files.find((f) => musicCode(f.name).toLowerCase() === c);
 }

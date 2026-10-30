@@ -4,7 +4,10 @@ import {
 } from 'antd';
 import { FireOutlined, ReloadOutlined } from '@ant-design/icons';
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { fmtNum, groupColor, musicFileFor, parseVideoName, useApi } from '../api.js';
+import dayjs from 'dayjs';
+import {
+  fmtNum, fmtSec, groupColor, musicCode, musicFileFor, parseVideoName, useApi,
+} from '../api.js';
 
 const UNKNOWN = '(không rõ)';
 const compact = (v) => Intl.NumberFormat('vi-VN', { notation: 'compact' }).format(v);
@@ -54,7 +57,7 @@ export default function MusicStats({ reels, days, onOpenReel }) {
       v.reels++;
       v.views += r.views;
       m.videos.set(vid, v);
-      m.list.push(r);
+      m.list.push({ ...r, ...info });
       map.set(key, m);
     }
     return [...map.values()]
@@ -63,7 +66,6 @@ export default function MusicStats({ reels, days, onOpenReel }) {
         file: m.code === UNKNOWN ? null : musicFileFor(m.code, files),
         avg: m.views / m.reels,
         eng: m.views ? (m.likes + m.comments + m.shares) / m.views : 0,
-        videoList: [...m.videos.values()].sort((a, b) => b.views - a.views),
         groupList: [...m.groups].sort(),
       }))
       .sort((a, b) => b.views - a.views);
@@ -121,7 +123,7 @@ export default function MusicStats({ reels, days, onOpenReel }) {
                 formatter={(v) => fmtNum(Math.round(v))}
                 labelFormatter={(code, p) => {
                   const m = p?.[0]?.payload;
-                  return m ? `${code}${m.file ? ` · ${m.file.name}` : ''} — ${m.reels} reel, ${m.videos.size} video` : code;
+                  return m ? `${code} — ${m.reels} reel, ${m.videos.size} video` : code;
                 }}
               />
               <Bar
@@ -150,27 +152,49 @@ export default function MusicStats({ reels, days, onOpenReel }) {
           pagination={{ pageSize: 30, showSizeChanger: false }}
           scroll={{ x: 1100 }}
           expandable={{
+            // Every reel that used this music; click a row for its history.
             expandedRowRender: (m) => (
               <Table
-                rowKey="id"
+                rowKey="video_id"
                 size="small"
-                pagination={false}
-                dataSource={m.videoList}
+                dataSource={m.list}
+                pagination={m.list.length > 20 ? { pageSize: 20, showSizeChanger: false } : false}
+                onRow={(r) => ({ onClick: () => onOpenReel(r), style: { cursor: 'pointer' } })}
+                title={() => <Typography.Text strong>{m.list.length} reel dùng nhạc {m.code}</Typography.Text>}
                 columns={[
-                  { title: 'Nhóm', dataIndex: 'group', width: 120, render: (g) => (g ? <Tag color={groupColor(g)}>{g}</Tag> : '-') },
-                  { title: 'STT', dataIndex: 'index', width: 70 },
-                  { title: 'Video', dataIndex: 'name', ellipsis: true },
-                  { title: 'Số reel', dataIndex: 'reels', width: 80, align: 'right' },
-                  { title: 'Views', dataIndex: 'views', width: 100, align: 'right', render: fmtNum },
-                  { title: 'TB / reel', key: 'avg', width: 100, align: 'right', render: (_, v) => fmtNum(Math.round(v.views / v.reels)) },
                   {
-                    title: 'Reel tốt nhất',
-                    key: 'best',
+                    title: 'Đăng lúc',
+                    dataIndex: 'published_at',
                     width: 110,
-                    render: (_, v) => {
-                      const best = m.list.filter((r) => (r.drive_file_id || r.video_id) === v.id).sort((a, b) => b.views - a.views)[0];
-                      return best ? <a onClick={() => onOpenReel(best)}>{fmtNum(best.views)} views</a> : '-';
-                    },
+                    sorter: (a, b) => a.published_at - b.published_at,
+                    render: (t) => dayjs(t).format('DD/MM HH:mm'),
+                  },
+                  { title: 'Page', dataIndex: 'page_name', width: 160, ellipsis: true },
+                  { title: 'Nhóm', dataIndex: 'group', width: 110, render: (g) => (g ? <Tag color={groupColor(g)}>{g}</Tag> : '-') },
+                  { title: 'STT', dataIndex: 'index', width: 60 },
+                  {
+                    title: 'Video',
+                    dataIndex: 'drive_file_name',
+                    ellipsis: true,
+                    render: (n, r) => (
+                      <>
+                        {r.viral ? <FireOutlined style={{ color: '#f76b15', marginRight: 4 }} /> : null}
+                        {n || r.caption || '(không rõ)'}
+                      </>
+                    ),
+                  },
+                  {
+                    title: 'Views', dataIndex: 'views', width: 90, align: 'right', defaultSortOrder: 'descend', sorter: (a, b) => a.views - b.views, render: fmtNum,
+                  },
+                  { title: 'Like', dataIndex: 'likes', width: 70, align: 'right', sorter: (a, b) => a.likes - b.likes, render: fmtNum },
+                  { title: 'Cmt', dataIndex: 'comments', width: 60, align: 'right', render: fmtNum },
+                  { title: 'Share', dataIndex: 'shares', width: 65, align: 'right', render: fmtNum },
+                  { title: 'Xem TB', dataIndex: 'avg_watch_ms', width: 70, align: 'right', render: fmtSec },
+                  {
+                    title: '',
+                    key: 'fb',
+                    width: 60,
+                    render: (_, r) => <a href={r.permalink} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>Mở</a>,
                   },
                 ]}
               />
@@ -185,19 +209,14 @@ export default function MusicStats({ reels, days, onOpenReel }) {
               render: (c) => (c === UNKNOWN ? <Typography.Text type="secondary">{c}</Typography.Text> : <Typography.Text strong>{c}</Typography.Text>),
             },
             {
-              title: 'File nhạc',
+              title: 'Nghe nhạc',
               key: 'file',
-              width: 260,
+              width: 240,
               render: (_, m) => {
                 if (m.code === UNKNOWN) return <Typography.Text type="secondary">Reel đăng ngoài app hoặc tên video sai mẫu</Typography.Text>;
                 if (!music?.configured) return '-';
                 if (!m.file) return <Typography.Text type="warning">Không tìm thấy trong thư mục</Typography.Text>;
-                return (
-                  <Space direction="vertical" size={2}>
-                    <Typography.Text ellipsis style={{ maxWidth: 240 }} title={m.file.name}>{m.file.name}</Typography.Text>
-                    <Player file={m.file} />
-                  </Space>
-                );
+                return <span title={m.file.name}><Player file={m.file} /></span>;
               },
             },
             {
@@ -237,7 +256,9 @@ export default function MusicStats({ reels, days, onOpenReel }) {
                 pagination={{ pageSize: 20, showSizeChanger: false }}
                 dataSource={unused}
                 columns={[
-                  { title: 'File nhạc', dataIndex: 'name', ellipsis: true },
+                  {
+                    title: 'Mã nhạc', key: 'code', width: 110, render: (_, f) => <Typography.Text strong title={f.name}>{musicCode(f.name)}</Typography.Text>,
+                  },
                   { title: 'Thư mục', dataIndex: 'folder', width: 180, ellipsis: true },
                   { title: 'Nghe', key: 'play', width: 240, render: (_, f) => <Player file={f} /> },
                 ]}
