@@ -589,17 +589,22 @@ export function registerRoutes(app) {
   app.get('/api/jobs', async (req) => {
     const where = [];
     const args = [];
-    if (req.query.status) { where.push('j.status = ?'); args.push(req.query.status); }
     if (req.query.pageId) { where.push('j.page_id = ?'); args.push(req.query.pageId); }
+    if (req.query.group === NO_GROUP) where.push('p.group_name IS NULL');
+    else if (req.query.group) { where.push('p.group_name = ?'); args.push(req.query.group); }
+    // Status counts follow the page/group filter but not the status filter itself.
+    const scope = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const counts = Object.fromEntries(db.prepare(`
+      SELECT j.status, COUNT(*) AS n FROM jobs j LEFT JOIN pages p ON p.id = j.page_id ${scope} GROUP BY j.status
+    `).all(...args).map((r) => [r.status, r.n]));
+    if (req.query.status) { where.push('j.status = ?'); args.push(req.query.status); }
     const rows = db.prepare(`
-      SELECT j.id, j.page_id, p.name AS page_name, j.drive_file_id, j.drive_file_name, j.caption, j.scheduled_at,
+      SELECT j.id, j.page_id, p.name AS page_name, p.group_name, j.drive_file_id, j.drive_file_name, j.caption, j.scheduled_at,
              j.status, j.video_id, j.attempts, j.error, j.published_at
       FROM jobs j LEFT JOIN pages p ON p.id = j.page_id
       ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
       ORDER BY j.scheduled_at DESC LIMIT 3000
     `).all(...args);
-    const counts = Object.fromEntries(
-      db.prepare('SELECT status, COUNT(*) AS n FROM jobs GROUP BY status').all().map((r) => [r.status, r.n]));
     return { rows, counts };
   });
 

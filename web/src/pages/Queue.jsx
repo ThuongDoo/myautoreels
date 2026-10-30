@@ -4,11 +4,12 @@ import {
 } from 'antd';
 import { DeleteOutlined, EditOutlined, RedoOutlined, SendOutlined, StopOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import { api, useApi } from '../api.js';
+import { api, groupColor, useApi } from '../api.js';
 import { STATUS } from '../status.js';
 import VideoDrawer from './VideoDrawer.jsx';
 
 const EDITABLE = ['pending', 'uploaded', 'failed', 'canceled'];
+const NO_GROUP = '__none__';
 
 function EditModal({ job, onClose, onSaved }) {
   const { message } = App.useApp();
@@ -39,12 +40,22 @@ export default function Queue() {
   const { message } = App.useApp();
   const [status, setStatus] = useState('');
   const [pageId, setPageId] = useState();
+  const [group, setGroup] = useState('');
   const [selected, setSelected] = useState([]);
   const [editing, setEditing] = useState(null);
   const [openVideo, setOpenVideo] = useState(null);
   const { data: pages = [] } = useApi('/pages');
+  const { data: groups = [] } = useApi('/groups');
+  const groupPages = group ? pages.filter((p) => (p.group_name || NO_GROUP) === group) : pages;
 
-  const query = new URLSearchParams({ ...(status && { status }), ...(pageId && { pageId }) }).toString();
+  // Picking a group drops a page filter that is outside it.
+  const pickGroup = (g) => {
+    setGroup(g);
+    if (g && pageId && !pages.some((p) => p.id === pageId && (p.group_name || NO_GROUP) === g)) setPageId(undefined);
+    setSelected([]);
+  };
+
+  const query = new URLSearchParams({ ...(status && { status }), ...(group && { group }), ...(pageId && { pageId }) }).toString();
   const { data, loading, reload } = useApi(`/jobs?${query}`, { refreshMs: 10_000 });
   const rows = data?.rows || [];
   const counts = data?.counts || {};
@@ -73,14 +84,27 @@ export default function Queue() {
           ]}
         />
         <Select
+          style={{ width: 200 }}
+          value={group}
+          onChange={pickGroup}
+          options={[
+            { value: '', label: 'Tất cả nhóm' },
+            ...groups.map((g) => ({
+              value: g.name,
+              label: <Space size={4}><Tag color={groupColor(g.name)} style={{ margin: 0 }}>{g.name}</Tag><Typography.Text type="secondary">{g.total}</Typography.Text></Space>,
+            })),
+            { value: NO_GROUP, label: 'Chưa có nhóm' },
+          ]}
+        />
+        <Select
           allowClear
           showSearch
-          placeholder="Lọc theo page"
+          placeholder={group ? `Lọc theo page (${groupPages.length})` : 'Lọc theo page'}
           optionFilterProp="label"
           style={{ width: 220 }}
           value={pageId}
           onChange={setPageId}
-          options={pages.map((p) => ({ value: p.id, label: p.name }))}
+          options={groupPages.map((p) => ({ value: p.id, label: p.name }))}
         />
       </Space>
 
@@ -114,7 +138,18 @@ export default function Queue() {
               <Tooltip title={dayjs(t).fromNow()}>{dayjs(t).format('DD/MM HH:mm')}</Tooltip>
             ),
           },
-          { title: 'Page', dataIndex: 'page_name', width: 180, ellipsis: true },
+          {
+            title: 'Page',
+            dataIndex: 'page_name',
+            width: 220,
+            ellipsis: true,
+            render: (n, j) => (
+              <Space size={4}>
+                <Typography.Text ellipsis style={{ maxWidth: 130 }}>{n}</Typography.Text>
+                {j.group_name && <Tag color={groupColor(j.group_name)} style={{ margin: 0 }}>{j.group_name}</Tag>}
+              </Space>
+            ),
+          },
           {
             title: 'Video',
             dataIndex: 'drive_file_name',
