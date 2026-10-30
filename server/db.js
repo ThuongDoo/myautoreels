@@ -5,6 +5,24 @@ import { DatabaseSync } from 'node:sqlite';
 export const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(import.meta.dirname, '..', 'data'));
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
+// A restore (see backups.js) leaves the backup here; it is swapped in before the database opens.
+// The current data is kept in data/backup/before-restore-<time>/.
+export const RESTORE_DIR = path.join(DATA_DIR, 'restore-pending');
+if (fs.existsSync(path.join(RESTORE_DIR, 'app.db'))) {
+  const keep = path.join(DATA_DIR, 'backup', `before-restore-${new Date().toISOString().replace(/[:.]/g, '-')}`);
+  fs.mkdirSync(keep, { recursive: true });
+  for (const f of ['app.db', 'app.db-wal', 'app.db-shm']) {
+    if (fs.existsSync(path.join(DATA_DIR, f))) fs.renameSync(path.join(DATA_DIR, f), path.join(keep, f));
+  }
+  if (fs.existsSync(path.join(RESTORE_DIR, 'avatars'))) {
+    if (fs.existsSync(path.join(DATA_DIR, 'avatars'))) fs.renameSync(path.join(DATA_DIR, 'avatars'), path.join(keep, 'avatars'));
+    fs.renameSync(path.join(RESTORE_DIR, 'avatars'), path.join(DATA_DIR, 'avatars'));
+  }
+  fs.renameSync(path.join(RESTORE_DIR, 'app.db'), path.join(DATA_DIR, 'app.db'));
+  fs.rmSync(RESTORE_DIR, { recursive: true, force: true });
+  console.warn(`♻️  Đã khôi phục backup, dữ liệu cũ cất ở ${keep}`);
+}
+
 export const db = new DatabaseSync(path.join(DATA_DIR, 'app.db'));
 
 db.exec(`

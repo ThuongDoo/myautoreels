@@ -41,7 +41,16 @@ const port = Number(process.env.PORT || 3000);
 if (!password && !['127.0.0.1', 'localhost'].includes(host)) {
   console.warn('⚠️  HOST đang mở ra ngoài mà chưa đặt APP_PASSWORD trong .env — ai cũng truy cập được!');
 }
-await app.listen({ host, port });
+// Retry briefly: after a restore the old process may still be releasing the port.
+for (let attempt = 1; ; attempt++) {
+  try {
+    await app.listen({ host, port });
+    break;
+  } catch (e) {
+    if (e.code !== 'EADDRINUSE' || attempt >= 20) throw e;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+}
 console.log(`AutoReels chạy tại http://${host === '0.0.0.0' ? 'localhost' : host}:${port}`);
 
 // DISABLE_WORKER=1 (e.g. a local copy of the VPS data) never posts reels and skips the

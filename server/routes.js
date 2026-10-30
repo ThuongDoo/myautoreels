@@ -8,6 +8,8 @@ import { listAudioRecursive, listFolder, listVideosRecursive, parseFolderId, ser
 import { refreshStats, isStatsRunning } from './stats.js';
 import { notify } from './telegram.js';
 import { renderCaption } from './caption.js';
+import { listBackups, prepareRestore } from './backups.js';
+import { spawn } from 'node:child_process';
 
 function bad(message, statusCode = 400) {
   const e = new Error(message);
@@ -44,6 +46,46 @@ export function registerRoutes(app) {
     if (body.music_folder_id) body.music_folder_id = parseFolderId(body.music_folder_id);
     for (const [k, v] of Object.entries(body)) if (SETTING_KEYS.includes(k)) setSetting(k, v);
     return { ok: true };
+  });
+
+  // --- Backups (made daily by scripts/backup-vps.sh) ---
+  const restorePassword = () => process.env.RESTORE_PASSWORD || process.env.APP_PASSWORD || '';
+  const sameSecret = (a, b) => {
+    const h = (s) => crypto.createHash('sha256').update(String(s)).digest();
+    return crypto.timingSafeEqual(h(a), h(b));
+  };
+  let restoring = false;
+
+  app.get('/api/backups', async () => ({
+    ...(await listBackups()),
+    canRestore: !!restorePassword(),
+    busy: db.prepare(`SELECT COUNT(*) AS n FROM jobs WHERE status IN ('uploading', 'publishing', 'processing')`).get().n,
+  }));
+
+  app.post('/api/backups/restore', async (req) => {
+    const { name, password } = req.body || {};
+    if (!restorePassword()) throw bad('Chưa đặt APP_PASSWORD (hoặc RESTORE_PASSWORD) trong .env nên không thể khôi phục');
+    if (!sameSecret(password || '', restorePassword())) {
+      await new Promise((r) => setTimeout(r, 1500));
+      throw bad('Sai mật khẩu', 403);
+    }
+    if (restoring) throw bad('Đang khôi phục rồi, chờ chút');
+    restoring = true;
+    try {
+      const counts = await prepareRestore(name);
+      app.log.warn(`restore ${name} prepared, restarting`);
+      // Under pm2 exiting is enough; started by hand, start a fresh copy first.
+      setTimeout(() => {
+        if (process.env.pm_id === undefined) {
+          spawn(process.execPath, process.execArgv.concat(process.argv.slice(1)), { detached: true, stdio: 'ignore' }).unref();
+        }
+        process.exit(0);
+      }, 500);
+      return { ok: true, ...counts };
+    } catch (e) {
+      restoring = false;
+      throw bad(`Không khôi phục được: ${e.message}`);
+    }
   });
 
   app.post('/api/telegram/test', async () => {

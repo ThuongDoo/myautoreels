@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Alert, App, Button, Card, Col, Form, Input, InputNumber, Row, Space, Typography } from 'antd';
 import { api, useApi } from '../api.js';
 import AccountsCard from './Accounts.jsx';
+import BackupsCard from './Backups.jsx';
 
 const NUMBER_KEYS = [
   'upload_concurrency', 'preupload_minutes', 'stats_interval_minutes', 'stats_days', 'viral_multiplier', 'viral_min_views',
@@ -124,6 +125,8 @@ export default function Settings() {
         </Col>
       </Row>
       <Button type="primary" htmlType="submit" size="large" loading={saving} style={{ marginTop: 16 }}>Lưu cài đặt</Button>
+      {/* Outside the settings form's fields: it has its own inputs and never submits the form. */}
+      <div style={{ marginTop: 24 }}><BackupsCard /></div>
     </Form>
   );
 }
