@@ -744,10 +744,12 @@ export function registerRoutes(app) {
   }
 
   app.get('/api/reels', async (req) => {
-    const since = Date.now() - Number(req.query.days || 7) * 86_400_000;
+    // `from`/`to` (ms, publish time) pick an exact window instead of the last `days` days.
+    const since = req.query.from ? Number(req.query.from) : Date.now() - Number(req.query.days || 7) * 86_400_000;
     const { where, args } = reelFilters(req.query);
     where.unshift('r.published_at >= ?');
     args.unshift(since);
+    if (req.query.to) { where.push('r.published_at < ?'); args.push(Number(req.query.to)); }
     if (req.query.viral === '1') where.push('r.viral = 1');
     return db.prepare(`
       SELECT r.*, p.name AS page_name, p.group_name,
@@ -765,14 +767,15 @@ export function registerRoutes(app) {
   // credited to its publish hour, since those views came in between publish and first fetch.
   // One row per hour × page so the chart can show which pages the views came from.
   // `from`/`to` (ms) pick an exact window instead of the last `days` days.
+  // `by=page` sums each page over the whole window (e.g. from=0 = its total up to `to`).
   app.get('/api/analytics/view-gains', async (req) => {
     const since = req.query.from ? Number(req.query.from) : Date.now() - Number(req.query.days || 7) * 86_400_000;
     const until = req.query.to ? Number(req.query.to) : Number.MAX_SAFE_INTEGER;
     const { where, args } = reelFilters(req.query);
-    return db.prepare(`
+    const rows = db.prepare(`
       WITH s AS (
         SELECT rs.ts, rs.views, COALESCE(rs.likes, 0) AS likes, COALESCE(rs.comments, 0) AS comments,
-               COALESCE(rs.shares, 0) AS shares, r.published_at, r.page_id, p.name AS page_name,
+               COALESCE(rs.shares, 0) AS shares, r.published_at, r.page_id, p.name AS page_name, p.group_name,
                LAG(rs.views) OVER w AS prev,
                LAG(COALESCE(rs.likes, 0)) OVER w AS prev_likes,
                LAG(COALESCE(rs.comments, 0)) OVER w AS prev_comments,
@@ -784,7 +787,7 @@ export function registerRoutes(app) {
         WINDOW w AS (PARTITION BY rs.video_id ORDER BY rs.ts)
       )
       SELECT (CASE WHEN prev IS NULL THEN published_at ELSE ts END) / 3600000 * 3600000 AS hour,
-             page_id, MAX(page_name) AS page_name,
+             page_id, MAX(page_name) AS page_name, MAX(group_name) AS group_name,
              SUM(MAX(views - COALESCE(prev, 0), 0)) AS gain,
              SUM(MAX(likes - COALESCE(prev_likes, 0), 0)) AS likes,
              SUM(MAX(comments - COALESCE(prev_comments, 0), 0)) AS comments,
@@ -794,6 +797,14 @@ export function registerRoutes(app) {
       HAVING hour >= ? AND hour < ? AND gain + likes + comments + shares > 0
       ORDER BY hour
     `).all(...args, since, until);
+    if (req.query.by !== 'page') return rows;
+    const byPage = new Map();
+    for (const r of rows) {
+      const p = byPage.get(r.page_id);
+      if (!p) byPage.set(r.page_id, { ...r, hour: null });
+      else for (const k of ['gain', 'likes', 'comments', 'shares']) p[k] += r[k];
+    }
+    return [...byPage.values()];
   });
 
   app.get('/api/reels/:id/history', async (req) =>
