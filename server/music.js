@@ -129,7 +129,7 @@ function run(cmd, args) {
 async function probe(file) {
   const out = await run(FFPROBE, [
     '-v', 'error',
-    '-show_entries', 'format=duration:stream=codec_type,width,height,r_frame_rate,duration:stream_tags=rotate:stream_side_data=rotation:stream_disposition=attached_pic',
+    '-show_entries', 'format=duration:stream=codec_type,codec_name,pix_fmt,sample_aspect_ratio,width,height,r_frame_rate,duration:stream_tags=rotate:stream_side_data=rotation:stream_disposition=attached_pic',
     '-of', 'json', file,
   ]);
   const info = JSON.parse(out);
@@ -144,6 +144,9 @@ async function probe(file) {
     width: turned ? v.height : v.width,
     height: turned ? v.width : v.height,
     fps: v.r_frame_rate && v.r_frame_rate !== '0/0' ? v.r_frame_rate : '30',
+    // A plain H.264 picture (no rotation, square pixels) can be copied after a hook encoded to match it.
+    joinable: v.codec_name === 'h264' && v.pix_fmt === 'yuv420p' && !rotation
+      && ['1:1', '0:1', undefined].includes(v.sample_aspect_ratio),
   };
 }
 
@@ -156,6 +159,53 @@ function oneAtATime(fn) {
 }
 
 const silence = (sec) => `anullsrc=r=44100:cl=stereo,atrim=duration=${sec.toFixed(3)}`;
+// The hook's sound (or silence), labelled [ha], exactly `sec` long.
+const hookAudio = (h, hookIn, sec) => (h.hasAudio
+  ? `[${hookIn}:a]${AUDIO_FMT},apad,atrim=duration=${sec.toFixed(3)}[ha]`
+  : `${silence(sec)}[ha]`);
+
+// Fast way to put a hook first: only the hook's few seconds of picture are encoded, matching the
+// video, and the video's own picture is copied after them. Both parts are joined as MPEG-TS, which
+// carries each part's H.264 settings with it.
+async function joinHook({ video, main, hook, h, hookVisual, inputs, filters, hookIn, out }) {
+  const { width: W, height: H } = main;
+  const fps = main.fps.split('/').map(Number).reduce((a, b) => a / b);
+  const frames = Math.max(1, Math.round(h.duration * fps));
+  const sec = frames / fps;
+  const hold = `tpad=stop_mode=clone:stop_duration=${(h.duration + 1).toFixed(3)}`;
+  const picture = hookVisual === 'tail' || !h.hasVideo
+    ? ['-sseof', `-${Math.min(h.duration, main.duration).toFixed(3)}`, '-i', video,
+      '-vf', `fps=${main.fps},${hold},format=yuv420p`]
+    : ['-i', hook,
+      '-vf', `scale=${W}:${H}:force_original_aspect_ratio=decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${main.fps},${hold},format=yuv420p`];
+  const intro = `${out}.intro.ts`;
+  const body = `${out}.body.ts`;
+  const list = `${out}.list.txt`;
+  const tmp = `${out}.part.mp4`;
+  const quote = (f) => `'${path.basename(f).replace(/'/g, "'\\''")}'`;
+  try {
+    await oneAtATime(() => run(FFMPEG, [
+      '-y', '-v', 'error', ...picture, '-an', '-frames:v', String(frames),
+      '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-f', 'mpegts', intro,
+    ]));
+    await run(FFMPEG, ['-y', '-v', 'error', '-i', video, '-map', '0:v:0', '-c', 'copy', '-bsf:v', 'h264_mp4toannexb', '-f', 'mpegts', body]);
+    fs.writeFileSync(list, `file ${quote(intro)}\nduration ${sec.toFixed(6)}\nfile ${quote(body)}\n`);
+    const joinedIn = inputs.filter((a) => a === '-i').length;
+    await run(FFMPEG, [
+      '-y', '-v', 'error',
+      ...inputs, '-f', 'concat', '-safe', '0', '-i', list,
+      '-filter_complex', [...filters, hookAudio(h, hookIn, sec), '[ha][ma]concat=n=2:v=0:a=1[a]'].join(';'),
+      '-map', `${joinedIn}:v:0`, '-map', '[a]',
+      '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k',
+      '-movflags', '+faststart',
+      tmp,
+    ]);
+    fs.renameSync(tmp, out);
+  } finally {
+    for (const f of [intro, body, list, tmp]) fs.rmSync(f, { force: true });
+  }
+  return { path: out, size: fs.statSync(out).size };
+}
 
 // Writes `out` from the video plus, optionally:
 // - music (mode 'replace' = music only, 'mix' = original sound kept at origVolume %): looped or cut to
@@ -163,7 +213,8 @@ const silence = (sec) => `anullsrc=r=44100:cl=stereo,atrim=duration=${sec.toFixe
 // - a hook played before the video with its own sound (the music never covers the hook). Its picture is
 //   the hook's own (hookVisual 'own') or, with 'tail' or when the hook is sound only, the last seconds
 //   of the video itself, as long as the hook: e.g. the finished drawing under "hướng dẫn vẽ tranh cho bé…".
-// Without a hook the picture is copied as is; with one it's re-encoded to the video's size and frame rate.
+// Without a hook the picture is copied as is; with one only the hook part is encoded when the video
+// allows it (joinHook), else the whole picture is re-encoded to the video's size and frame rate.
 export async function buildVideo({ video, music, hook, hookVisual = 'own', out, mode, origVolume = 30 }) {
   const main = await probe(video);
   if (!main.duration) throw new Error('Không đọc được thời lượng video');
@@ -193,6 +244,13 @@ export async function buildVideo({ video, music, hook, hookVisual = 'own', out, 
   if (hook) {
     const h = await probe(hook);
     if (!h.duration) throw new Error('Không đọc được thời lượng hook');
+    if (main.joinable && !process.env.HOOK_FULL_ENCODE) {
+      try {
+        return await joinHook({ video, main, hook, h, hookVisual, inputs, filters, hookIn, out });
+      } catch (e) {
+        console.warn(`[music] nối nhanh hook không được, mã hoá lại cả video: ${e.message}`);
+      }
+    }
     const { width: W, height: H, fps } = main;
     const same = `setsar=1,fps=${fps},format=yuv420p`;
     if (hookVisual === 'tail' || !h.hasVideo) {
@@ -210,7 +268,7 @@ export async function buildVideo({ video, music, hook, hookVisual = 'own', out, 
       );
     }
     filters.push(
-      h.hasAudio ? `[${hookIn}:a]${AUDIO_FMT},apad,atrim=duration=${h.duration.toFixed(3)}[ha]` : `${silence(h.duration)}[ha]`,
+      hookAudio(h, hookIn, h.duration),
       '[hv][ha][mv][ma]concat=n=2:v=1:a=1[v][a]',
     );
     maps = ['-map', '[v]', '-map', '[a]'];
