@@ -67,6 +67,13 @@ export default function Settings() {
             >
               <Input placeholder="Link hoặc ID thư mục Drive chứa nhạc" />
             </Form.Item>
+            <Form.Item
+              label="Thư mục hook"
+              name="hook_folder_id"
+              extra="Video ngắn hoặc voice (mp3, m4a) vài giây để ghép ngẫu nhiên vào đầu reel khi lên lịch. Voice thì hình lấy từ đoạn cuối video. Có thể chia thư mục con theo chủ đề. Share thư mục cho email ở trên."
+            >
+              <Input placeholder="Link hoặc ID thư mục Drive chứa hook" />
+            </Form.Item>
           </Card>
         </Col>
 

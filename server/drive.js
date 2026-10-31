@@ -5,7 +5,7 @@ import { pipeline } from 'node:stream/promises';
 import { drive as createDrive, auth } from '@googleapis/drive';
 import { db, getSetting, DATA_DIR } from './db.js';
 
-const CACHE_DIR = path.join(DATA_DIR, 'cache');
+export const CACHE_DIR = path.join(DATA_DIR, 'cache');
 fs.mkdirSync(CACHE_DIR, { recursive: true });
 
 const FOLDER_MIME = 'application/vnd.google-apps.folder';
@@ -67,6 +67,7 @@ export async function listFolder(folderId, kinds = ['video']) {
     videos: items.filter((f) => f.mimeType !== FOLDER_MIME).map((f) => ({
       id: f.id,
       name: f.name,
+      kind: f.mimeType.split('/')[0],
       size: Number(f.size || 0),
       createdTime: f.createdTime,
       durationMs: Number(f.videoMediaMetadata?.durationMillis || 0),
@@ -85,6 +86,18 @@ export async function listVideosRecursive(folderId, folderName = '', depth = 0) 
   if (depth < MAX_DEPTH) {
     for (const f of folders) {
       out.push(...await listVideosRecursive(f.id, folderName ? `${folderName}/${f.name}` : f.name, depth + 1));
+    }
+  }
+  return out;
+}
+
+// Files of the given MIME kinds (e.g. audio, video) inside a folder and its subfolders, each with its folder path.
+export async function listFilesRecursive(folderId, kinds, folderName = '', depth = 0) {
+  const { folders, videos } = await listFolder(folderId, kinds);
+  const out = videos.map((v) => ({ ...v, folder: folderName }));
+  if (depth < MAX_DEPTH) {
+    for (const f of folders) {
+      out.push(...await listFilesRecursive(f.id, kinds, folderName ? `${folderName}/${f.name}` : f.name, depth + 1));
     }
   }
   return out;
@@ -146,13 +159,13 @@ export async function streamFile(fileId, range) {
   };
 }
 
-// Delete the cached file once no job needs it within the next hour.
+// Delete the cached file (a video, music or hook) once no job needs it within the next hour.
 export function releaseLocal(fileId) {
   const soon = Date.now() + 60 * 60 * 1000;
   const { n } = db.prepare(`
     SELECT COUNT(*) AS n FROM jobs
-    WHERE drive_file_id = ? AND (status = 'uploading' OR (status = 'pending' AND scheduled_at <= ?))
-  `).get(fileId, soon);
+    WHERE (drive_file_id = ? OR music_file_id = ? OR hook_file_id = ?) AND (status = 'uploading' OR (status = 'pending' AND scheduled_at <= ?))
+  `).get(fileId, fileId, fileId, soon);
   if (n > 0 || inflight.has(fileId)) return;
   try {
     fs.rmSync(path.join(CACHE_DIR, fileId), { force: true });

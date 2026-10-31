@@ -2,7 +2,7 @@ import { useState } from 'react';
 import {
   App, Button, Card, DatePicker, Form, Input, Modal, Popconfirm, Segmented, Select, Space, Table, Tag, Tooltip, Typography,
 } from 'antd';
-import { DeleteOutlined, EditOutlined, RedoOutlined, SendOutlined, StopOutlined } from '@ant-design/icons';
+import { CustomerServiceOutlined, DeleteOutlined, EditOutlined, RedoOutlined, SendOutlined, StopOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { api, groupColor, useApi } from '../api.js';
 import { STATUS } from '../status.js';
@@ -155,7 +155,23 @@ export default function Queue() {
             dataIndex: 'drive_file_name',
             width: 200,
             ellipsis: true,
-            render: (n, j) => <a onClick={() => setOpenVideo({ id: j.drive_file_id, name: n })}>{n}</a>,
+            render: (n, j) => (
+              <>
+                <a onClick={() => setOpenVideo({ id: j.drive_file_id, name: n })}>{n}</a>
+                {j.hook_file_name && (
+                  <Typography.Text type="secondary" ellipsis style={{ display: 'block', fontSize: 12 }}>
+                    <ThunderboltOutlined /> Hook: {j.hook_file_name}
+                  </Typography.Text>
+                )}
+                {j.music_file_name && (
+                  <Tooltip title={j.audio_mode === 'mix' ? `Trộn với tiếng gốc ${j.orig_volume}%` : 'Thay tiếng gốc'}>
+                    <Typography.Text type="secondary" ellipsis style={{ display: 'block', fontSize: 12 }}>
+                      <CustomerServiceOutlined /> {j.music_file_name}
+                    </Typography.Text>
+                  </Tooltip>
+                )}
+              </>
+            ),
           },
           {
             title: 'Caption',

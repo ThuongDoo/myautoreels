@@ -1,10 +1,14 @@
 import { db, getSetting } from './db.js';
 import * as fb from './fb.js';
-import { ensureLocal, releaseLocal } from './drive.js';
+import fs from 'node:fs';
+import { CACHE_DIR, ensureLocal, releaseLocal } from './drive.js';
+import { buildVideo, mergedPath } from './music.js';
 
 const TICK_MS = 15_000;
 const MAX_ATTEMPTS = 3;
 const PROCESSING_TIMEOUT_MS = 2 * 60 * 60 * 1000;
+// Jobs with a hook start this much earlier: the whole video is re-encoded, which can take minutes on a small VPS.
+const HOOK_LEAD_MS = 30 * 60_000;
 
 const busy = new Set();
 let activeUploads = 0;
@@ -31,8 +35,17 @@ function fail(job, err, retryStatus) {
 }
 
 async function uploadJob(job) {
+  // Music and / or a hook go into a new file built for this job.
+  const merged = job.music_file_id || job.hook_file_id ? mergedPath(CACHE_DIR, job.id) : null;
   try {
-    const file = await ensureLocal(job.drive_file_id);
+    let file = await ensureLocal(job.drive_file_id);
+    if (merged) {
+      const music = job.music_file_id && await ensureLocal(job.music_file_id);
+      const hook = job.hook_file_id && await ensureLocal(job.hook_file_id);
+      file = await buildVideo({
+        video: file.path, music: music?.path, hook: hook?.path, hookVisual: job.hook_visual || 'own', out: merged, mode: job.audio_mode, origVolume: job.orig_volume ?? 30,
+      });
+    }
     const { video_id, upload_url } = await fb.startReelUpload(job.page_id, job.access_token);
     const url = upload_url || `https://rupload.facebook.com/video-upload/${getSetting('graph_version')}/${video_id}`;
     setJob(job.id, { video_id, upload_url: url });
@@ -44,6 +57,11 @@ async function uploadJob(job) {
     activeUploads--;
     busy.delete(job.id);
     releaseLocal(job.drive_file_id);
+    if (merged) {
+      if (job.music_file_id) releaseLocal(job.music_file_id);
+      if (job.hook_file_id) releaseLocal(job.hook_file_id);
+      fs.rmSync(merged, { force: true });
+    }
   }
 }
 
@@ -98,7 +116,8 @@ function tick() {
 
   // Upload a few minutes early so the reel goes live exactly at scheduled_at.
   if (slots > 0) {
-    for (const job of ready(`j.status = 'pending' AND p.enabled = 1 AND j.scheduled_at <= ?`, now + preUploadMs).slice(0, slots)) {
+    const due = `j.scheduled_at - CASE WHEN j.hook_file_id IS NULL THEN 0 ELSE ${HOOK_LEAD_MS} END <= ?`;
+    for (const job of ready(`j.status = 'pending' AND p.enabled = 1 AND ${due}`, now + preUploadMs).slice(0, slots)) {
       busy.add(job.id);
       activeUploads++;
       setJob(job.id, { status: 'uploading' });

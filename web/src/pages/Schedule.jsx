@@ -1,12 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Alert, App, Breadcrumb, Button, Card, Checkbox, Col, Collapse, DatePicker, Form, Input, InputNumber, Popconfirm, Popover, Radio, Row, Select,
-  Space, Spin, Table, Tag, Tooltip, Typography,
+  Alert, App, Breadcrumb, Button, Card, Checkbox, Col, Collapse, DatePicker, Form, Input, InputNumber, Modal, Popconfirm, Popover, Radio, Row, Select,
+  Slider, Space, Spin, Table, Tag, Tooltip, Typography,
 } from 'antd';
-import { DeleteOutlined, FolderOutlined, RightOutlined, SaveOutlined, VideoCameraOutlined } from '@ant-design/icons';
+import {
+  CustomerServiceOutlined, DeleteOutlined, EyeOutlined, FolderOutlined, PauseCircleOutlined, PlayCircleOutlined, ReloadOutlined, RightOutlined, SaveOutlined, SoundOutlined, ThunderboltOutlined, VideoCameraOutlined,
+} from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { api, fmtSize, fmtSec, groupColor, useApi } from '../api.js';
 import { checkCaption, renderCaption } from '../caption.js';
+import { Preview as HookPreview } from './Hooks.jsx';
+import LibraryBrowser, { filesOf } from './LibraryBrowser.jsx';
 
 const MAX_REELS_PER_DAY = 30;
 const ROOT_KEY = 'autoreels.driveRoot';
@@ -156,6 +160,129 @@ function CaptionTemplates({ template, onPick }) {
   );
 }
 
+// Form fields a saved schedule config keeps. Videos and start dates change every time, so they're left out.
+const PRESET_FIELDS = [
+  'pageIds', 'skipUsed', 'mode', 'shuffle', 'timing', 'slots', 'intervalMinutes', 'gapMinSec', 'gapMaxSec', 'captionTemplate',
+  'hookMode', 'hookVisual', 'hookKeys', 'audioMode', 'musicPick', 'musicFileId', 'musicKeys', 'origVolume',
+];
+const PRESET_KEY = 'autoreels.schedulePreset';
+
+// Saved schedule configs. The one used last is applied again when the page opens (once `ready`).
+function SchedulePresets({ form, pageIds, ready }) {
+  const { message } = App.useApp();
+  const { data: list, reload } = useApi('/schedule-presets');
+  const [currentId, setCurrentId] = useState();
+  const [saving, setSaving] = useState(false);
+  const [name, setName] = useState('');
+  const restored = useRef(false);
+  const nameInput = useRef(null);
+  const current = list?.find((p) => p.id === currentId);
+
+  const apply = (p, quiet) => {
+    const config = Object.fromEntries(PRESET_FIELDS.filter((k) => k in p.config).map((k) => [k, p.config[k]]));
+    // Pages deleted or turned off since the config was saved are dropped.
+    if (config.pageIds) config.pageIds = config.pageIds.filter((id) => pageIds.has(id));
+    form.setFieldsValue(config);
+    setCurrentId(p.id);
+    storage.set(PRESET_KEY, String(p.id));
+    if (!quiet) message.success(`Đã áp dụng cấu hình "${p.name}"`);
+  };
+
+  useEffect(() => {
+    if (restored.current || !ready || !list) return;
+    restored.current = true;
+    const last = list.find((p) => String(p.id) === storage.get(PRESET_KEY));
+    if (last) apply(last, true);
+  }, [ready, list]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const save = async () => {
+    const all = form.getFieldsValue(true);
+    try {
+      const p = await api.post('/schedule-presets', { name, config: Object.fromEntries(PRESET_FIELDS.map((k) => [k, all[k]])) });
+      message.success(`Đã lưu cấu hình "${p.name}"`);
+      setSaving(false);
+      await reload({ silent: true });
+      setCurrentId(p.id);
+      storage.set(PRESET_KEY, String(p.id));
+    } catch (e) {
+      message.error(e.message);
+    }
+  };
+
+  const remove = async () => {
+    try {
+      await api.del(`/schedule-presets/${currentId}`);
+      message.success(`Đã xoá cấu hình "${current.name}"`);
+      setCurrentId(undefined);
+      storage.set(PRESET_KEY, '');
+      reload({ silent: true });
+    } catch (e) {
+      message.error(e.message);
+    }
+  };
+
+  return (
+    <Card size="small" style={{ marginBottom: 16 }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+        <Typography.Text strong>Cấu hình lên lịch:</Typography.Text>
+        <Select
+          allowClear
+          showSearch
+          optionFilterProp="label"
+          placeholder={list?.length ? `Chọn cấu hình đã lưu (${list.length})` : 'Chưa lưu cấu hình nào'}
+          style={{ width: 280, maxWidth: '100%' }}
+          value={currentId}
+          onChange={(id) => {
+            const p = list.find((x) => x.id === id);
+            if (p) apply(p);
+            else { setCurrentId(undefined); storage.set(PRESET_KEY, ''); }
+          }}
+          options={(list || []).map((p) => ({ value: p.id, label: p.name }))}
+          optionRender={(o) => {
+            const p = list.find((x) => x.id === o.value);
+            return (
+              <div>
+                <div>{p.name}</div>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  {p.config.pageIds?.length || 0} page · {p.config.timing === 'interval' ? `cách ${p.config.intervalMinutes} phút` : (p.config.slots || []).join(', ')}
+                  {p.config.hookMode === 'random' && ' · hook'}
+                  {p.config.audioMode && p.config.audioMode !== 'keep' && ' · nhạc'}
+                </Typography.Text>
+              </div>
+            );
+          }}
+        />
+        <Popover
+          trigger="click"
+          open={saving}
+          onOpenChange={(o) => { setSaving(o); if (o) setName(current?.name || ''); }}
+          title="Lưu cấu hình lên lịch"
+          afterOpenChange={(o) => o && nameInput.current?.focus()}
+          content={(
+            <Space direction="vertical" style={{ width: 280 }}>
+              <Input ref={nameInput} placeholder="Tên, ví dụ: Vẽ tranh - tối" value={name} onChange={(e) => setName(e.target.value)} onPressEnter={() => name.trim() && save()} />
+              {list?.some((p) => p.name === name.trim()) && (
+                <Typography.Text type="warning" style={{ fontSize: 12 }}>Trùng tên: cấu hình cũ sẽ được cập nhật.</Typography.Text>
+              )}
+              <Button type="primary" block onClick={save} disabled={!name.trim()}>Lưu</Button>
+            </Space>
+          )}
+        >
+          <Button icon={<SaveOutlined />}>{current ? 'Lưu / cập nhật' : 'Lưu cấu hình'}</Button>
+        </Popover>
+        {current && (
+          <Popconfirm title={`Xoá cấu hình "${current.name}"?`} onConfirm={remove}>
+            <Tooltip title="Xoá cấu hình đang chọn"><Button danger icon={<DeleteOutlined />} /></Tooltip>
+          </Popconfirm>
+        )}
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          Lưu page, cách phân bổ, khung giờ, caption, hook và nhạc (không lưu video và ngày bắt đầu). Mở trang sẽ tự dùng cấu hình chọn lần trước.
+        </Typography.Text>
+      </div>
+    </Card>
+  );
+}
+
 function CaptionHelper({ template, onInsert, sampleVideo, samplePages }) {
   const [seed, setSeed] = useState(0);
   const problems = checkCaption(template);
@@ -226,6 +353,295 @@ function CaptionHelper({ template, onInsert, sampleVideo, samplePages }) {
         ]}
       />
     </div>
+  );
+}
+
+const MUSIC_PICKS = [
+  { value: 'one', label: 'Một bài cho tất cả' },
+  { value: 'random', label: 'Ngẫu nhiên' },
+  { value: 'sequence', label: 'Lần lượt từng bài' },
+  { value: 'least_used', label: 'Ưu tiên bài lâu chưa dùng' },
+  { value: 'top_views', label: 'Ưu tiên bài nhiều view' },
+];
+
+const MUSIC_PICK_HELP = {
+  random: 'Mỗi lịch đăng nhận một bài ngẫu nhiên.',
+  sequence: 'Lần lượt theo tên bài: hết danh sách thì quay lại từ đầu.',
+  least_used: 'Bài lâu chưa dùng (hoặc chưa dùng bao giờ) được chọn trước.',
+  top_views: 'Bài có views trung bình / reel càng cao thì càng hay được chọn.',
+};
+
+const pickOne = (list) => list[Math.floor(Math.random() * list.length)];
+
+// Builds one of the picked videos with a random hook / song from the picked ones, exactly like the
+// worker will before posting, and plays it. Nothing is scheduled or posted.
+function MergePreview({ values, videos, hooks, music }) {
+  const [open, setOpen] = useState(false);
+  const [state, setState] = useState({});
+  const useHook = values.hookMode === 'random';
+  const useMusic = values.audioMode && values.audioMode !== 'keep';
+  if (!useHook && !useMusic) return null;
+
+  const enabledHooks = (hooks?.files || []).filter((h) => !h.disabled);
+  const hookPool = values.hookKeys?.length ? filesOf(enabledHooks, values.hookKeys) : enabledHooks;
+  const songs = music?.files || [];
+  const musicPool = values.musicPick === 'one'
+    ? songs.filter((m) => m.id === values.musicFileId)
+    : (values.musicKeys?.length ? filesOf(songs, values.musicKeys) : songs);
+  const problem = !videos.length ? 'Chọn ít nhất 1 video ở mục 1'
+    : useHook && !hookPool.length ? 'Chưa có hook nào để ghép'
+      : useMusic && !musicPool.length ? (values.musicPick === 'one' ? 'Chưa chọn bài nhạc' : 'Chưa có bài nhạc nào để ghép')
+        : null;
+
+  const run = async () => {
+    const pick = { video: pickOne(videos), hook: useHook ? pickOne(hookPool) : null, song: useMusic ? pickOne(musicPool) : null };
+    setOpen(true);
+    setState({ loading: true, ...pick });
+    try {
+      const r = await api.post('/preview', {
+        videoFileId: pick.video.id,
+        hookFileId: pick.hook?.id,
+        hookVisual: values.hookVisual,
+        audioMode: values.audioMode,
+        musicFileId: pick.song?.id,
+        origVolume: values.origVolume,
+      });
+      setState({ ...pick, ...r });
+    } catch (e) {
+      setState({ ...pick, error: e.message });
+    }
+  };
+
+  return (
+    <>
+      <Tooltip title={problem}>
+        <Button block icon={<EyeOutlined />} disabled={!!problem} onClick={run} style={{ marginBottom: 8 }}>
+          Xem thử 1 video sau khi ghép {[useHook && 'hook', useMusic && 'nhạc'].filter(Boolean).join(' + ')}
+        </Button>
+      </Tooltip>
+      <Modal
+        open={open}
+        title="Xem thử video sau khi ghép"
+        width={400}
+        destroyOnClose
+        onCancel={() => setOpen(false)}
+        footer={[
+          <Button key="close" onClick={() => setOpen(false)}>Đóng</Button>,
+          <Button key="again" type="primary" icon={<ReloadOutlined />} loading={state.loading} onClick={run}>Thử video khác</Button>,
+        ]}
+      >
+        <div
+          style={{
+            width: '100%', aspectRatio: '9 / 16', maxHeight: '60vh', margin: '0 auto', background: '#000', borderRadius: 8, overflow: 'hidden',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', textAlign: 'center', padding: state.id ? 0 : 24,
+          }}
+        >
+          {state.loading && (
+            <Space direction="vertical">
+              <Spin />
+              <span>Đang tải và ghép video...</span>
+              <Typography.Text style={{ color: '#aaa', fontSize: 12 }}>
+                {useHook ? 'Có hook nên phải mã hoá lại hình, thường mất 20–60 giây.' : 'Chỉ ghép nhạc, thường vài giây.'}
+              </Typography.Text>
+            </Space>
+          )}
+          {state.error && <Typography.Text style={{ color: '#ff7875' }}>{state.error}</Typography.Text>}
+          {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+          {state.id && <video key={state.id} controls autoPlay src={`/api/preview/${state.id}`} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />}
+        </div>
+        {state.video && (
+          <div style={{ marginTop: 12, fontSize: 13, lineHeight: 1.8 }}>
+            <div><VideoCameraOutlined /> Video: {state.video.name}</div>
+            {state.hook && (
+              <div>
+                <ThunderboltOutlined /> Hook: {state.hook.name}
+                {(values.hookVisual === 'tail' || state.hook.kind === 'audio') && <Typography.Text type="secondary"> (hình lấy từ cuối video)</Typography.Text>}
+              </div>
+            )}
+            {state.song && (
+              <div>
+                <CustomerServiceOutlined /> Nhạc: {state.song.name}
+                <Typography.Text type="secondary"> ({values.audioMode === 'mix' ? `trộn tiếng gốc ${values.origVolume}%` : 'bỏ tiếng gốc'})</Typography.Text>
+              </div>
+            )}
+            {state.id && (
+              <Typography.Text type="secondary">
+                Ghép mất {(state.ms / 1000).toFixed(0)} giây trên máy này · {fmtSize(state.size)}
+              </Typography.Text>
+            )}
+          </div>
+        )}
+      </Modal>
+    </>
+  );
+}
+
+// "Hook mở đầu" card; its fields belong to the schedule Form that wraps the whole page.
+function HookCard({ values, hooks, loading }) {
+  const [preview, setPreview] = useState(null);
+  const enabled = useMemo(() => (hooks?.files || []).filter((h) => !h.disabled), [hooks]);
+  const on = values.hookMode === 'random';
+  const picked = values.hookKeys?.length ? filesOf(enabled, values.hookKeys).length : enabled.length;
+
+  return (
+    <Card title="2. Hook mở đầu">
+      <Form.Item name="hookMode" style={{ marginBottom: on ? 16 : 0 }}>
+        <Radio.Group>
+          <Radio value="none">Không ghép hook</Radio>
+          <Radio value="random" disabled={hooks && !hooks.configured}>Ghép ngẫu nhiên 1 hook vào đầu mỗi video</Radio>
+        </Radio.Group>
+      </Form.Item>
+      {hooks && !hooks.configured && (
+        <Alert type="info" showIcon style={{ marginTop: 12 }} message={<>Chưa có thư mục hook, thêm ở trang <a href="#settings">Cài đặt</a>.</>} />
+      )}
+      {on && (
+        <Form.Item
+          label="Hình của đoạn hook"
+          name="hookVisual"
+          extra={values.hookVisual === 'tail'
+            ? 'Cắt đoạn cuối video, dài bằng hook, đưa lên đầu; hook chỉ dùng tiếng. Ví dụ: tranh đã vẽ xong + voice "hướng dẫn vẽ tranh cho bé…". Hook là file âm thanh (mp3, m4a) luôn dùng cách này.'
+            : 'Dùng nguyên hình và tiếng của file hook. Hook là file âm thanh vẫn lấy hình từ đoạn cuối video.'}
+        >
+          <Radio.Group>
+            <Radio value="tail">Lấy đoạn cuối của video</Radio>
+            <Radio value="own">Dùng hình trong file hook</Radio>
+          </Radio.Group>
+        </Form.Item>
+      )}
+      {on && (
+        <Form.Item
+          label="Chọn hook"
+          tooltip="Tick thư mục = lấy toàn bộ hook bên trong (kể cả thư mục con). Không tick gì = tất cả hook đang bật."
+          name="hookKeys"
+          style={{ marginBottom: 0 }}
+          extra={(
+            <>
+              Hook giữ nguyên tiếng của nó, nhạc nền (nếu có) chỉ phủ phần video chính. Một page không bị lặp lại hook trong 3 lần đăng gần nhất.
+              Hook tắt ở <a href="#hooks">Kho hook</a> không hiện ở đây.{' '}
+              <Typography.Text type={picked ? 'secondary' : 'danger'}>Sẽ chọn ngẫu nhiên trong {picked} hook.</Typography.Text>
+            </>
+          )}
+        >
+          <LibraryBrowser
+            files={enabled}
+            loading={loading}
+            rootName="Thư mục hook"
+            unit="hook"
+            icon={(h) => (h.kind === 'audio' ? <SoundOutlined /> : <VideoCameraOutlined />)}
+            action={(h) => <Button type="text" size="small" icon={<PlayCircleOutlined />} onClick={() => setPreview(h)} />}
+            columns={[
+              { title: 'Thời lượng', dataIndex: 'durationMs', width: 100, render: (v, h) => (h.kind === 'audio' ? <Tag color="purple" style={{ margin: 0 }}>Chỉ tiếng</Tag> : fmtSec(v)) },
+              {
+                title: 'Đã dùng',
+                key: 'used',
+                width: 130,
+                render: (_, h) => (
+                  <Space size={2}>
+                    {h.posted > 0 && <Tag color="green" style={{ margin: 0 }}>Đăng {h.posted}</Tag>}
+                    {h.upcoming > 0 && <Tag color="blue" style={{ margin: 0 }}>Chờ {h.upcoming}</Tag>}
+                  </Space>
+                ),
+              },
+            ]}
+          />
+        </Form.Item>
+      )}
+      {preview && <HookPreview hook={preview} onClose={() => setPreview(null)} />}
+    </Card>
+  );
+}
+
+// "Nhạc nền" card; its fields belong to the schedule Form that wraps the whole page.
+function MusicCard({ values, music, loading }) {
+  const [listening, setListening] = useState(null);
+  const files = music?.files || [];
+  const mode = values.audioMode || 'keep';
+  const picked = values.musicKeys?.length ? filesOf(files, values.musicKeys).length : files.length;
+  const browser = {
+    files,
+    loading,
+    rootName: 'Thư mục nhạc',
+    unit: 'bài',
+    icon: <CustomerServiceOutlined />,
+    action: (f) => (
+      <Button
+        type="text"
+        size="small"
+        icon={listening?.id === f.id ? <PauseCircleOutlined /> : <PlayCircleOutlined />}
+        onClick={() => setListening(listening?.id === f.id ? null : f)}
+      />
+    ),
+    columns: [{ title: 'Dung lượng', dataIndex: 'size', width: 100, render: (v) => (v ? fmtSize(v) : '') }],
+  };
+
+  return (
+    <Card title="3. Nhạc nền">
+      <Form.Item
+        name="audioMode"
+        style={{ marginBottom: mode === 'keep' ? 0 : 16 }}
+        extra={mode !== 'keep' && 'Nhạc được ghép vào video ngay trước khi upload: dài hơn video thì cắt, ngắn hơn thì lặp lại, tự nhỏ dần ở cuối.'}
+      >
+        <Radio.Group>
+          <Radio value="keep">Giữ nguyên âm thanh của video</Radio>
+          <Radio value="replace" disabled={music && !music.configured}>Thay bằng nhạc (bỏ tiếng gốc)</Radio>
+          <Radio value="mix" disabled={music && !music.configured}>Trộn nhạc với tiếng gốc</Radio>
+        </Radio.Group>
+      </Form.Item>
+      {music && !music.configured && (
+        <Alert type="info" showIcon style={{ marginTop: 12 }} message={<>Chưa có thư mục nhạc, thêm ở trang <a href="#settings">Cài đặt</a> để chọn nhạc riêng.</>} />
+      )}
+
+      {mode !== 'keep' && (
+        <>
+          <Row gutter={16}>
+            <Col xs={24} md={12}>
+              <Form.Item label="Cách chọn nhạc" name="musicPick">
+                <Select options={MUSIC_PICKS} />
+              </Form.Item>
+            </Col>
+            {mode === 'mix' && (
+              <Col xs={24} md={12}>
+                <Form.Item label="Âm lượng tiếng gốc" name="origVolume">
+                  <Slider min={0} max={100} step={5} tooltip={{ formatter: (v) => `${v}%` }} marks={{ 0: '0%', 30: '30%', 100: '100%' }} />
+                </Form.Item>
+              </Col>
+            )}
+          </Row>
+          {values.musicPick === 'one' ? (
+            <Form.Item
+              label="Chọn 1 bài"
+              name="musicFileId"
+              rules={[{ required: true, message: 'Chọn một bài nhạc' }]}
+              style={{ marginBottom: 0 }}
+            >
+              <LibraryBrowser single {...browser} />
+            </Form.Item>
+          ) : (
+            <Form.Item
+              label="Chọn nhạc"
+              tooltip="Tick thư mục = lấy toàn bộ bài bên trong (kể cả thư mục con). Không tick gì = tất cả bài trong thư mục nhạc."
+              name="musicKeys"
+              style={{ marginBottom: 0 }}
+              extra={(
+                <>
+                  {MUSIC_PICK_HELP[values.musicPick]} Một page không bị lặp lại bài trong 3 lần đăng gần nhất.{' '}
+                  <Typography.Text type={picked ? 'secondary' : 'danger'}>Sẽ chọn trong {picked} bài.</Typography.Text>
+                </>
+              )}
+            >
+              <LibraryBrowser {...browser} />
+            </Form.Item>
+          )}
+          {listening && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}>
+              <Typography.Text type="secondary" ellipsis style={{ flex: '0 1 auto', minWidth: 0 }}>Đang nghe: {listening.name}</Typography.Text>
+              {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+              <audio key={listening.id} autoPlay controls style={{ height: 30, flex: '0 0 280px' }} src={`/api/drive/stream/${encodeURIComponent(listening.id)}`} onEnded={() => setListening(null)} />
+            </div>
+          )}
+        </>
+      )}
+    </Card>
   );
 }
 
@@ -395,7 +811,8 @@ function DriveBrowser({ selectedKeys, onSelect, videoCache, folderNames, folders
 export default function Schedule() {
   const { message } = App.useApp();
   const [form] = Form.useForm();
-  const { data: pages = [] } = useApi('/pages');
+  const { data: pagesLoaded } = useApi('/pages');
+  const pages = pagesLoaded || [];
   const videoCache = useRef({});
   const folderNames = useRef({});
   const [selectedKeys, setSelectedKeys] = useState([]);
@@ -468,6 +885,8 @@ export default function Schedule() {
   }, [enabledPages]);
 
   const { data: settings } = useApi('/settings');
+  const { data: music, loading: musicLoading } = useApi('/music');
+  const { data: hooks, loading: hooksLoading } = useApi('/hooks');
   useEffect(() => {
     if (settings?.time_slots && !form.isFieldTouched('slots')) {
       form.setFieldValue('slots', normalizeSlots(settings.time_slots.split(',')));
@@ -528,6 +947,15 @@ export default function Schedule() {
         gapMinSec: v.gapMinSec,
         gapMaxSec: v.gapMaxSec,
         captionTemplate: v.captionTemplate,
+        audioMode: v.audioMode,
+        musicPick: v.musicPick,
+        musicFileId: v.musicFileId,
+        // Picked files ([] = all); a ticked folder stands for every file inside it.
+        musicFileIds: filesOf(music?.files || [], v.musicKeys).map((m) => m.id),
+        origVolume: v.origVolume,
+        hookMode: v.hookMode,
+        hookVisual: v.hookVisual,
+        hookFileIds: filesOf((hooks?.files || []).filter((h) => !h.disabled), v.hookKeys).map((h) => h.id),
       });
       message.success(
         <>
@@ -545,38 +973,57 @@ export default function Schedule() {
     }
   };
 
+  // One Form across both columns. component={false}: no <form> element, so Enter in a search box
+  // (Drive link, hook / music search) does not submit the schedule.
   return (
-    <Row gutter={[16, 16]}>
-      <Col xs={24} xl={14}>
-        <DriveBrowser
-          selectedKeys={selectedKeys}
-          onSelect={onSelect}
-          videoCache={videoCache}
-          folderNames={folderNames}
-          folders={folders}
-        />
-      </Col>
-      <Col xs={24} xl={10}>
-        <Card title="2. Cài đặt lịch đăng">
-          <Form
-            form={form}
-            layout="vertical"
-            onFinish={submit}
-            initialValues={{
-              mode: 'all',
-              shuffle: true,
-              skipUsed: 'none',
-              timing: 'slots',
-              slots: ['07:00', '11:00', '20:00'],
-              startDate: dayjs(),
-              startAt: dayjs().add(30, 'minute').second(0),
-              intervalMinutes: 60,
-              gapMinSec: 30,
-              gapMaxSec: 120,
-              captionTemplate: '{filename}',
-              pageIds: [],
-            }}
-          >
+    <Form
+      form={form}
+      component={false}
+      layout="vertical"
+      onFinish={submit}
+      initialValues={{
+        mode: 'all',
+        shuffle: true,
+        skipUsed: 'none',
+        timing: 'slots',
+        slots: ['07:00', '11:00', '20:00'],
+        startDate: dayjs(),
+        startAt: dayjs().add(30, 'minute').second(0),
+        intervalMinutes: 60,
+        gapMinSec: 30,
+        gapMaxSec: 120,
+        captionTemplate: '{filename}',
+        pageIds: [],
+        audioMode: 'keep',
+        musicPick: 'least_used',
+        musicKeys: [],
+        origVolume: 30,
+        hookMode: 'none',
+        hookKeys: [],
+        hookVisual: 'tail',
+      }}
+    >
+      <SchedulePresets
+        form={form}
+        pageIds={new Set(enabledPages.map((p) => p.id))}
+        ready={!!pagesLoaded && !!settings}
+      />
+      <Row gutter={[16, 16]}>
+        <Col xs={24} xl={14}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>
+            <DriveBrowser
+              selectedKeys={selectedKeys}
+              onSelect={onSelect}
+              videoCache={videoCache}
+              folderNames={folderNames}
+              folders={folders}
+            />
+            <HookCard values={values} hooks={hooks} loading={hooksLoading} />
+            <MusicCard values={values} music={music} loading={musicLoading} />
+          </div>
+        </Col>
+        <Col xs={24} xl={10}>
+          <Card title="4. Cài đặt lịch đăng">
             <Form.Item
               label="Chọn theo nhóm (ngách)"
               extra={!Object.keys(groups).length && <>Chưa có nhóm nào — tạo ở trang <a href="#pages">Pages</a>.</>}
@@ -731,6 +1178,13 @@ export default function Schedule() {
                     </li>
                     <li>Mỗi lượt: {postsPerSlot} page đăng rải trong khoảng {fmtMinutes(spreadMin)}</li>
                     <li>Mỗi page: tối đa {perDay} reel/ngày</li>
+                    {values.hookMode === 'random' && <li>Mỗi video được ghép 1 hook ngẫu nhiên ở đầu</li>}
+                    {values.audioMode && values.audioMode !== 'keep' && (
+                      <li>
+                        Nhạc: {MUSIC_PICKS.find((m) => m.value === values.musicPick)?.label.toLowerCase()},{' '}
+                        {values.audioMode === 'mix' ? `trộn với tiếng gốc ${values.origVolume}%` : 'bỏ tiếng gốc'}
+                      </li>
+                    )}
                     {spreadMin > minSlotGapMin && (
                       <li><b>Lượt trước chưa đăng xong đã tới lượt sau</b> — giảm khoảng cách giữa các page hoặc giãn khung giờ.</li>
                     )}
@@ -742,12 +1196,13 @@ export default function Schedule() {
               />
             )}
 
-            <Button type="primary" htmlType="submit" block size="large" loading={submitting} disabled={foldersLoading}>
+            <MergePreview values={values} videos={videos} hooks={hooks} music={music} />
+            <Button type="primary" onClick={form.submit} block size="large" loading={submitting} disabled={foldersLoading}>
               {foldersLoading ? 'Đang tải video trong thư mục...' : `Tạo lịch đăng${V ? ` (${V} video)` : ''}`}
             </Button>
-          </Form>
-        </Card>
-      </Col>
-    </Row>
+          </Card>
+        </Col>
+      </Row>
+    </Form>
   );
 }

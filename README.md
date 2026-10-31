@@ -17,6 +17,7 @@ Khi phát triển: `npm run dev` rồi mở http://localhost:5173.
 App phải chạy liên tục thì mới đăng đúng giờ. Trên VPS dùng pm2:
 
 ```bash
+sudo apt-get install -y ffmpeg   # để ghép nhạc chọn khi lên lịch vào video
 npm i -g pm2
 pm2 start npm --name autoreels -- start
 pm2 save && pm2 startup
@@ -46,6 +47,7 @@ Nhiều BM: lặp lại các bước trên cho từng BM (mỗi BM một app, Sy
 3. Dán nội dung file JSON vào **Cài đặt → Google Drive**, lưu.
 4. Share thư mục video trên Drive cho email service account hiện ra (quyền Người xem).
 5. Dán link thư mục vào ô "Thư mục video mặc định".
+6. (Tuỳ chọn) Làm tương tự cho **Thư mục nhạc** và **Thư mục hook** để chọn nhạc nền / ghép hook vào đầu video khi lên lịch (cần ffmpeg trên máy chủ).
 
 ## Cách hoạt động
 

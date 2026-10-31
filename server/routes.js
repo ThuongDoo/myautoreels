@@ -4,11 +4,14 @@ import path from 'node:path';
 import { createTask, runTask } from './tasks.js';
 import { DATA_DIR, db, getAllSettings, getSetting, setSetting, SETTING_KEYS, transaction } from './db.js';
 import * as fb from './fb.js';
-import { listAudioRecursive, listFolder, listVideosRecursive, parseFolderId, serviceAccountEmail, streamFile } from './drive.js';
+import {
+  CACHE_DIR, ensureLocal, listAudioRecursive, listFilesRecursive, listFolder, listVideosRecursive, parseFolderId, releaseLocal, serviceAccountEmail, streamFile,
+} from './drive.js';
 import { refreshStats, isStatsRunning } from './stats.js';
 import { renderCaption } from './caption.js';
 import { listBackups, prepareRestore } from './backups.js';
 import { spawn } from 'node:child_process';
+import { assignHooks, assignMusic, buildVideo, MUSIC_PICKS } from './music.js';
 
 function bad(message, statusCode = 400) {
   const e = new Error(message);
@@ -43,6 +46,7 @@ export function registerRoutes(app) {
     }
     if (body.drive_folder_id) body.drive_folder_id = parseFolderId(body.drive_folder_id);
     if (body.music_folder_id) body.music_folder_id = parseFolderId(body.music_folder_id);
+    if (body.hook_folder_id) body.hook_folder_id = parseFolderId(body.hook_folder_id);
     for (const [k, v] of Object.entries(body)) if (SETTING_KEYS.includes(k)) setSetting(k, v);
     return { ok: true };
   });
@@ -105,6 +109,28 @@ export function registerRoutes(app) {
 
   app.delete('/api/caption-templates/:id', async (req) => {
     db.prepare('DELETE FROM caption_templates WHERE id = ?').run(Number(req.params.id));
+    return { ok: true };
+  });
+
+  // --- Schedule presets: the schedule form's settings saved under a name (same name overwrites) ---
+  const presetRow = (p) => ({ id: p.id, name: p.name, config: JSON.parse(p.config), updated_at: p.updated_at });
+  app.get('/api/schedule-presets', async () =>
+    db.prepare('SELECT * FROM schedule_presets ORDER BY name').all().map(presetRow));
+
+  app.post('/api/schedule-presets', async (req) => {
+    const name = req.body?.name?.trim();
+    const config = req.body?.config;
+    if (!name) throw bad('Chưa nhập tên cấu hình');
+    if (!config || typeof config !== 'object') throw bad('Thiếu cấu hình');
+    db.prepare(`
+      INSERT INTO schedule_presets (name, config, updated_at) VALUES (?, ?, ?)
+      ON CONFLICT(name) DO UPDATE SET config = excluded.config, updated_at = excluded.updated_at
+    `).run(name, JSON.stringify(config), Date.now());
+    return presetRow(db.prepare('SELECT * FROM schedule_presets WHERE name = ?').get(name));
+  });
+
+  app.delete('/api/schedule-presets/:id', async (req) => {
+    db.prepare('DELETE FROM schedule_presets WHERE id = ?').run(Number(req.params.id));
     return { ok: true };
   });
 
@@ -483,13 +509,73 @@ export function registerRoutes(app) {
 
   // Music files from the music folder, cached for a few minutes since the stats page polls.
   let musicCache = { key: null, at: 0, files: null };
-  app.get('/api/music', async (req) => {
+  const musicFiles = async (fresh) => {
     const folderId = getSetting('music_folder_id');
-    if (!folderId) return { configured: false, files: [] };
-    if (req.query.fresh || musicCache.key !== folderId || Date.now() - musicCache.at > 10 * 60_000) {
+    if (!folderId) return null;
+    if (fresh || musicCache.key !== folderId || Date.now() - musicCache.at > 10 * 60_000) {
       musicCache = { key: folderId, at: Date.now(), files: await listAudioRecursive(folderId) };
     }
-    return { configured: true, files: musicCache.files };
+    return musicCache.files;
+  };
+  app.get('/api/music', async (req) => {
+    const files = await musicFiles(req.query.fresh);
+    return { configured: !!files, files: files || [] };
+  });
+
+  // Hooks (short intros played before a video: video clips, or voice-only audio) from the hook folder, cached like the music.
+  let hookCache = { key: null, at: 0, files: null };
+  const hookFiles = async (fresh) => {
+    const folderId = getSetting('hook_folder_id');
+    if (!folderId) return null;
+    if (fresh || hookCache.key !== folderId || Date.now() - hookCache.at > 10 * 60_000) {
+      hookCache = { key: folderId, at: Date.now(), files: await listFilesRecursive(folderId, ['audio', 'video']) };
+    }
+    const disabled = new Set(db.prepare('SELECT drive_file_id FROM hook_meta WHERE disabled = 1').all().map((m) => m.drive_file_id));
+    return hookCache.files.map((h) => ({ ...h, disabled: disabled.has(h.id) }));
+  };
+  // The files picked in the schedule form ([] = all of them).
+  const pickedOf = (files, ids) => (ids.length ? files.filter((f) => ids.includes(f.id)) : files);
+
+  // Hooks with their use: posts (done / upcoming, all time) and reel views published in the last `days`.
+  // `compare` sets reels with a hook against reels without one over the same days.
+  app.get('/api/hooks', async (req) => {
+    const files = await hookFiles(req.query.fresh);
+    if (!files) return { configured: false, files: [] };
+    const since = Date.now() - Number(req.query.days || 30) * 86_400_000;
+    const use = new Map(db.prepare(`
+      SELECT j.hook_file_id AS id,
+             SUM(j.status = 'done') AS posted,
+             SUM(j.status IN ('pending', 'uploading', 'uploaded', 'publishing', 'processing')) AS upcoming,
+             MAX(j.published_at) AS last_posted,
+             COUNT(CASE WHEN r.published_at >= ? THEN 1 END) AS reels,
+             COALESCE(SUM(CASE WHEN r.published_at >= ? THEN r.views END), 0) AS views
+      FROM jobs j LEFT JOIN reels r ON r.job_id = j.id
+      WHERE j.hook_file_id IS NOT NULL AND j.status != 'canceled'
+      GROUP BY j.hook_file_id
+    `).all(since, since).map((u) => [u.id, u]));
+    const compare = db.prepare(`
+      SELECT j.hook_file_id IS NOT NULL AS with_hook, COUNT(*) AS reels, COALESCE(SUM(r.views), 0) AS views
+      FROM reels r JOIN jobs j ON j.id = r.job_id
+      WHERE r.published_at >= ?
+      GROUP BY with_hook
+    `).all(since);
+    const side = (w) => compare.find((c) => c.with_hook === w) || { reels: 0, views: 0 };
+    return {
+      configured: true,
+      files: files.map((h) => {
+        const u = use.get(h.id) || {};
+        return { ...h, posted: u.posted || 0, upcoming: u.upcoming || 0, last_posted: u.last_posted || null, reels: u.reels || 0, views: u.views || 0 };
+      }),
+      compare: { withHook: side(1), withoutHook: side(0) },
+    };
+  });
+
+  app.put('/api/hooks/:id', async (req) => {
+    db.prepare(`
+      INSERT INTO hook_meta (drive_file_id, disabled) VALUES (?, ?)
+      ON CONFLICT(drive_file_id) DO UPDATE SET disabled = excluded.disabled
+    `).run(req.params.id, req.body?.disabled ? 1 : 0);
+    return { ok: true };
   });
 
   app.get('/api/drive/stream/:fileId', async (req, reply) => {
@@ -498,6 +584,59 @@ export function registerRoutes(app) {
     for (const [k, v] of Object.entries(file.headers)) if (v) reply.header(k, v);
     reply.header('accept-ranges', 'bytes').header('cache-control', 'private, max-age=3600');
     return reply.send(file.body);
+  });
+
+  // --- Preview: builds one video with its hook / music the way the worker will, without posting it ---
+  // Only the last few previews are kept on disk.
+  const PREVIEW_KEEP = 3;
+  const previews = [];
+  app.post('/api/preview', async (req, reply) => {
+    const b = req.body || {};
+    if (!b.videoFileId) throw bad('Thiếu video');
+    const mode = ['replace', 'mix'].includes(b.audioMode) ? b.audioMode : 'keep';
+    const musicId = mode !== 'keep' ? b.musicFileId : null;
+    const hookId = b.hookFileId || null;
+    if (mode !== 'keep' && !musicId) throw bad('Chưa có bài nhạc nào để ghép');
+    if (!musicId && !hookId) throw bad('Chưa chọn hook hoặc nhạc để ghép');
+
+    const id = crypto.randomBytes(8).toString('hex');
+    const out = path.join(CACHE_DIR, `preview-${id}.mp4`);
+    const ids = [b.videoFileId, musicId, hookId].filter(Boolean);
+    const started = Date.now();
+    try {
+      const [video, music, hook] = await Promise.all([b.videoFileId, musicId, hookId].map((f) => f && ensureLocal(f)));
+      await buildVideo({
+        video: video.path,
+        music: music?.path,
+        hook: hook?.path,
+        hookVisual: b.hookVisual === 'own' ? 'own' : 'tail',
+        out,
+        mode,
+        origVolume: Math.min(100, Math.max(0, Number(b.origVolume ?? 30))),
+      });
+    } finally {
+      for (const f of ids) releaseLocal(f);
+    }
+    previews.push(out);
+    while (previews.length > PREVIEW_KEEP) fs.rmSync(previews.shift(), { force: true });
+    return { id, ms: Date.now() - started, size: fs.statSync(out).size };
+  });
+
+  app.get('/api/preview/:id', async (req, reply) => {
+    if (!/^[0-9a-f]{16}$/.test(req.params.id)) throw bad('Không có bản xem thử này', 404);
+    const file = path.join(CACHE_DIR, `preview-${req.params.id}.mp4`);
+    if (!fs.existsSync(file)) throw bad('Bản xem thử đã bị xoá, bấm ghép lại', 404);
+    const size = fs.statSync(file).size;
+    reply.header('content-type', 'video/mp4').header('accept-ranges', 'bytes').header('cache-control', 'no-store');
+    const m = /bytes=(\d*)-(\d*)/.exec(req.headers.range || '');
+    if (!m) return reply.header('content-length', size).send(fs.createReadStream(file));
+    const start = m[1] ? Number(m[1]) : Math.max(0, size - Number(m[2]));
+    const end = m[1] && m[2] ? Math.min(Number(m[2]), size - 1) : size - 1;
+    if (start >= size || start > end) return reply.code(416).header('content-range', `bytes */${size}`).send();
+    return reply.code(206)
+      .header('content-range', `bytes ${start}-${end}/${size}`)
+      .header('content-length', end - start + 1)
+      .send(fs.createReadStream(file, { start, end }));
   });
 
   // --- Source videos: how each Drive file has been used across pages ---
@@ -600,7 +739,8 @@ export function registerRoutes(app) {
     if (req.query.status) { where.push('j.status = ?'); args.push(req.query.status); }
     const rows = db.prepare(`
       SELECT j.id, j.page_id, p.name AS page_name, p.group_name, j.drive_file_id, j.drive_file_name, j.caption, j.scheduled_at,
-             j.status, j.video_id, j.attempts, j.error, j.published_at
+             j.status, j.video_id, j.attempts, j.error, j.published_at,
+             j.music_file_id, j.music_file_name, j.audio_mode, j.orig_volume, j.hook_file_id, j.hook_file_name, j.hook_visual
       FROM jobs j LEFT JOIN pages p ON p.id = j.page_id
       ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
       ORDER BY j.scheduled_at DESC LIMIT 3000
@@ -626,6 +766,11 @@ export function registerRoutes(app) {
   app.post('/api/jobs/bulk', async (req) => {
     const {
       videos = [], pageIds = [], mode = 'all', slotTimes = [], gapMinSec = 30, gapMaxSec = 120, shuffle = false, captionTemplate = '',
+      // audioMode: 'keep' (video as is) | 'replace' | 'mix'. musicFileIds: music to pick from ([] = all).
+      audioMode = 'keep', musicPick = 'random', musicFileId, musicFileIds = [], origVolume = 30,
+      // hookMode: 'none' | 'random' (a random enabled hook from hookFileIds, [] = all, before each video).
+      // hookVisual: 'tail' (picture = the video's last seconds, hook gives the sound) | 'own' (the hook's own picture).
+      hookMode = 'none', hookFileIds = [], hookVisual = 'tail',
     } = req.body || {};
     if (!videos.length) throw bad('Chưa chọn video');
     if (!pageIds.length) throw bad('Chưa chọn page');
@@ -676,6 +821,13 @@ export function registerRoutes(app) {
     }
     const slotsNeeded = Math.max(...plan.map((p) => p.slot)) + 1;
     if (slotsNeeded > times.length) throw bad(`Cần ${slotsNeeded} khung giờ nhưng chỉ có ${times.length}`);
+    if (audioMode !== 'keep') {
+      if (!['replace', 'mix'].includes(audioMode)) throw bad('Kiểu âm thanh không hợp lệ');
+      if (!MUSIC_PICKS.includes(musicPick)) throw bad('Cách chọn nhạc không hợp lệ');
+      if (musicPick === 'one' && !musicFileId) throw bad('Chưa chọn bài nhạc');
+    }
+    if (!['none', 'random'].includes(hookMode)) throw bad('Kiểu ghép hook không hợp lệ');
+    if (!['tail', 'own'].includes(hookVisual)) throw bad('Kiểu hình của hook không hợp lệ');
 
     const lo = Math.max(0, Math.min(gapMinSec, gapMaxSec)) * 1000;
     const hi = Math.max(gapMinSec, gapMaxSec) * 1000;
@@ -688,15 +840,38 @@ export function registerRoutes(app) {
       });
     }
 
+    if (audioMode !== 'keep') {
+      const files = await musicFiles();
+      if (!files) throw bad('Chưa cấu hình thư mục nhạc trong Cài đặt');
+      try {
+        assignMusic(plan, musicPick === 'one' ? files : pickedOf(files, musicFileIds), { pick: musicPick, fileId: musicFileId });
+      } catch (e) {
+        throw bad(e.message);
+      }
+    }
+    if (hookMode === 'random') {
+      const files = await hookFiles();
+      if (!files) throw bad('Chưa cấu hình thư mục hook trong Cài đặt');
+      try {
+        assignHooks(plan, pickedOf(files.filter((h) => !h.disabled), hookFileIds));
+      } catch (e) {
+        throw bad(e.message);
+      }
+    }
+    const volume = Math.min(100, Math.max(0, Math.round(Number(origVolume) || 0)));
+
     const now = Date.now();
     const insert = db.prepare(`
-      INSERT INTO jobs (page_id, drive_file_id, drive_file_name, caption, scheduled_at, status, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)
+      INSERT INTO jobs (page_id, drive_file_id, drive_file_name, caption, scheduled_at, status, created_at, updated_at,
+                        music_file_id, music_file_name, audio_mode, orig_volume, hook_file_id, hook_file_name, hook_visual)
+      VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     transaction(() => {
-      for (const { page, video, at } of plan) {
+      for (const { page, video, at, music, hook } of plan) {
         const caption = renderCaption(captionTemplate, { filename: video.name.replace(/\.[^.]+$/, ''), page: page.name });
-        insert.run(page.id, video.id, video.name, caption, at, now, now);
+        insert.run(page.id, video.id, video.name, caption, at, now, now,
+          music?.id ?? null, music?.name ?? null, music ? audioMode : null, music && audioMode === 'mix' ? volume : null,
+          hook?.id ?? null, hook?.name ?? null, hook ? hookVisual : null);
       }
     });
     const planned = plan.map((p) => p.at);
@@ -753,7 +928,7 @@ export function registerRoutes(app) {
     if (req.query.viral === '1') where.push('r.viral = 1');
     return db.prepare(`
       SELECT r.*, p.name AS page_name, p.group_name,
-             j.drive_file_id, j.drive_file_name,
+             j.drive_file_id, j.drive_file_name, j.music_file_id, j.music_file_name, j.hook_file_id, j.hook_file_name,
              (SELECT COUNT(*) FROM jobs j2 WHERE j2.drive_file_id = j.drive_file_id AND j2.status = 'done') AS source_posts
       FROM reels r
       LEFT JOIN pages p ON p.id = r.page_id

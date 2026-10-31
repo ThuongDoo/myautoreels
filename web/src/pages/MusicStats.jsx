@@ -26,7 +26,7 @@ function Player({ file }) {
   );
 }
 
-// Reels grouped by the music code in their source video's name (see parseVideoName).
+// Reels grouped by the music picked when scheduling, or else the music code in their source video's name (see parseVideoName).
 export default function MusicStats({ reels, periodLabel, onOpenReel }) {
   // `fresh` skips the server's cache of the music folder.
   const [fresh, setFresh] = useState(0);
@@ -37,8 +37,10 @@ export default function MusicStats({ reels, periodLabel, onOpenReel }) {
   const rows = useMemo(() => {
     const map = new Map();
     for (const r of reels) {
-      const info = parseVideoName(r.drive_file_name);
-      const code = (r.drive_file_name && info.music) || UNKNOWN;
+      // Music picked at scheduling time wins over the code in the video's name.
+      const parsed = parseVideoName(r.drive_file_name);
+      const info = r.music_file_name ? { ...parsed, music: musicCode(r.music_file_name) } : parsed;
+      const code = ((r.drive_file_name || r.music_file_name) && info.music) || UNKNOWN;
       const key = musicKey(code);
       const m = map.get(key) || {
         code, views: 0, reels: 0, likes: 0, comments: 0, shares: 0, viral: 0,

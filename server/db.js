@@ -126,11 +126,50 @@ db.exec(`
     template TEXT NOT NULL,
     updated_at INTEGER
   );
+
+  -- Saved schedule form settings (pages, times, caption, hook, music); config is JSON.
+  CREATE TABLE IF NOT EXISTS schedule_presets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    config TEXT NOT NULL,
+    updated_at INTEGER
+  );
 `);
 
 if (!db.prepare('PRAGMA table_info(pages)').all().some((c) => c.name === 'account_id')) {
   db.exec('ALTER TABLE pages ADD COLUMN account_id INTEGER');
 }
+
+// Music picked at scheduling time and put into the video before upload.
+// audio_mode: 'replace' (music only) | 'mix' (original sound kept at orig_volume %).
+if (!db.prepare('PRAGMA table_info(jobs)').all().some((c) => c.name === 'music_file_id')) {
+  db.exec(`
+    ALTER TABLE jobs ADD COLUMN music_file_id TEXT;
+    ALTER TABLE jobs ADD COLUMN music_file_name TEXT;
+    ALTER TABLE jobs ADD COLUMN audio_mode TEXT;
+    ALTER TABLE jobs ADD COLUMN orig_volume INTEGER;
+  `);
+}
+
+// Hook clip picked at scheduling time and played before the video.
+if (!db.prepare('PRAGMA table_info(jobs)').all().some((c) => c.name === 'hook_file_id')) {
+  db.exec(`
+    ALTER TABLE jobs ADD COLUMN hook_file_id TEXT;
+    ALTER TABLE jobs ADD COLUMN hook_file_name TEXT;
+  `);
+}
+// hook_visual: 'tail' = the video's last seconds under the hook's sound, 'own' = the hook's own picture.
+if (!db.prepare('PRAGMA table_info(jobs)').all().some((c) => c.name === 'hook_visual')) {
+  db.exec('ALTER TABLE jobs ADD COLUMN hook_visual TEXT');
+}
+
+// Hooks turned off in "Kho hook" are never picked for new jobs.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS hook_meta (
+    drive_file_id TEXT PRIMARY KEY,
+    disabled INTEGER NOT NULL DEFAULT 0
+  );
+`);
 
 // One-time move of the old single-account settings (fb_token / business_id) into fb_accounts.
 {
@@ -149,6 +188,7 @@ const DEFAULTS = {
   google_sa_json: '',
   drive_folder_id: '',
   music_folder_id: '',
+  hook_folder_id: '',
   time_slots: '07:00,11:00,20:00',
   upload_concurrency: '4',
   preupload_minutes: '10',

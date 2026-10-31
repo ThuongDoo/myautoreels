@@ -6,6 +6,8 @@ cd "$(dirname "$0")"
 # data/ and .env are gitignored and left alone.
 git fetch origin main
 git reset --hard origin/main
+# ffmpeg puts the music picked at scheduling time into the videos.
+command -v ffmpeg >/dev/null || sudo apt-get install -y ffmpeg
 npm install
 npm run build
 pm2 restart autoreels
