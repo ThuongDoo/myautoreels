@@ -2,7 +2,9 @@ import { useEffect, useState } from 'react';
 import {
   App, Avatar, Button, Card, Divider, Dropdown, Input, Popconfirm, Select, Space, Switch, Table, Tag, Typography,
 } from 'antd';
-import { DownOutlined, PictureOutlined, SettingOutlined, SyncOutlined } from '@ant-design/icons';
+import {
+  DownOutlined, ExportOutlined, PictureOutlined, SettingOutlined, SyncOutlined,
+} from '@ant-design/icons';
 import { api, groupColor, useApi } from '../api.js';
 import AvatarBulkModal from './AvatarBulk.jsx';
 import TaskProgressModal, { LOG_COLORS } from './TaskProgress.jsx';
@@ -197,7 +199,12 @@ export default function Pages() {
             title: 'Page',
             dataIndex: 'name',
             sorter: (a, b) => a.name.localeCompare(b.name),
-            render: (name, p) => <Space><Avatar src={p.picture} size="small" />{name}</Space>,
+            // Opens the page on Facebook in a new tab.
+            render: (name, p) => (
+              <a href={`https://www.facebook.com/${p.id}`} target="_blank" rel="noreferrer" title="Mở page trên Facebook (tab mới)">
+                <Space><Avatar src={p.picture} size="small" />{name}<ExportOutlined style={{ fontSize: 11, color: '#999' }} /></Space>
+              </a>
+            ),
           },
           { title: 'ID', dataIndex: 'id', render: (id) => <Typography.Text copyable type="secondary">{id}</Typography.Text> },
           {
