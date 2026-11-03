@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   App, Button, Card, Col, Drawer, Empty, Input, Row, Segmented, Select, Space, Statistic, Switch, Table, Tag, Typography,
 } from 'antd';
@@ -72,7 +72,8 @@ export function HistoryDrawer({ reel, onClose, onOpenVideo }) {
 
 export default function Reels() {
   const { message } = App.useApp();
-  const [days, setDays] = useState(7);
+  // 'today' = reels published since 00:00 today (the default); a number = the last N days.
+  const [days, setDays] = useState('today');
   const [pageId, setPageId] = useState();
   const [group, setGroup] = useState();
   const [tab, setTab] = useState('charts');
@@ -85,7 +86,17 @@ export default function Reels() {
   const { data: pages = [] } = useApi('/pages');
   const { data: groups = [] } = useApi('/groups');
   const { data: ov, reload: reloadOverview } = useApi('/overview', { refreshMs: 15_000 });
-  const query = new URLSearchParams({ days, ...(pageId && { pageId }), ...(group && { group }) }).toString();
+  // Rounded to the hour (or day) so the request URLs stay the same between renders.
+  const hourKey = dayjs().format('YYYY-MM-DD HH');
+  const period = useMemo(() => (days === 'today'
+    ? { from: dayjs().startOf('day'), label: 'hôm nay', short: 'hôm nay' }
+    : { from: dayjs().startOf('hour').subtract(days * 24, 'hour'), label: `${days} ngày qua`, short: `${days} ngày` }
+  ), [days, hourKey]);
+  const query = new URLSearchParams({
+    ...(days === 'today' ? { from: period.from.valueOf() } : { days }),
+    ...(pageId && { pageId }),
+    ...(group && { group }),
+  }).toString();
   const { data = [], loading, reload } = useApi(`/reels?${query}`, { refreshMs: 60_000 });
 
   const refresh = async () => {
@@ -146,7 +157,13 @@ export default function Reels() {
           <Segmented
             value={days}
             onChange={setDays}
-            options={[{ value: 1, label: '24h' }, { value: 3, label: '3 ngày' }, { value: 7, label: '7 ngày' }, { value: 30, label: '30 ngày' }]}
+            options={[
+              { value: 'today', label: 'Hôm nay' },
+              { value: 1, label: '24h' },
+              { value: 3, label: '3 ngày' },
+              { value: 7, label: '7 ngày' },
+              { value: 30, label: '30 ngày' },
+            ]}
           />
           <Select
             allowClear
@@ -178,7 +195,7 @@ export default function Reels() {
           <Button type="text" icon={<ReloadOutlined />} onClick={() => reload()} />
         </Space>
 
-        {tab === 'charts' && <ReelCharts reels={data} days={days} query={query} onOpenPage={setOpenPage} />}
+        {tab === 'charts' && <ReelCharts reels={data} period={period} query={query} onOpenPage={setOpenPage} />}
         {tab === 'list' && (
         <Table
           rowKey="video_id"
@@ -250,7 +267,7 @@ export default function Reels() {
         />
         )}
       </Card>
-      {openPage && <PageDrawer pageId={openPage} reels={data} days={days} onClose={() => setOpenPage(null)} onOpenReel={setOpen} />}
+      {openPage && <PageDrawer pageId={openPage} reels={data} periodLabel={period.label} onClose={() => setOpenPage(null)} onOpenReel={setOpen} />}
       {open && <HistoryDrawer reel={open} onClose={() => setOpen(null)} onOpenVideo={setOpenVideo} />}
       {openVideo && <VideoDrawer video={openVideo} onClose={() => setOpenVideo(null)} />}
     </Space>

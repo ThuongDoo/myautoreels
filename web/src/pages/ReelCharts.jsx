@@ -218,8 +218,9 @@ const TOP_RANGES = {
 };
 
 // Every chart card picks its own window from TOP_RANGES. 'period' follows the page-wide
-// "N ngày" filter. `qs` is the API query for that window (from/to + group/page filters).
-function useRange(query, days, initial = "period") {
+// filter: `period` = { from (dayjs), label, short }. `qs` is the API query for that window
+// (from/to + group/page filters).
+function useRange(query, period, initial = "period") {
   const [key, setKey] = useState(initial);
   const [custom, setCustom] = useState(() => [
     dayjs().startOf("day").subtract(1, "day"),
@@ -227,7 +228,7 @@ function useRange(query, days, initial = "period") {
   ]);
   let from;
   let to = null;
-  if (key === "period") from = dayjs().startOf("hour").subtract(days * 24, "hour");
+  if (key === "period") from = period.from;
   else if (key === "custom") [from, to] = [custom[0].startOf("hour"), custom[1].startOf("hour").add(1, "hour")];
   else [from, to = null] = TOP_RANGES[key].range();
   const end = to || dayjs();
@@ -238,7 +239,7 @@ function useRange(query, days, initial = "period") {
   if (to) q.set("to", to.valueOf());
 
   const label =
-    key === "period" ? `${days} ngày qua`
+    key === "period" ? period.label
       : key === "custom" ? `${from.format("HH:00 DD/MM")} – ${end.format("HH:00 DD/MM")}`
         : TOP_RANGES[key].label.toLowerCase();
 
@@ -262,7 +263,7 @@ function useRange(query, days, initial = "period") {
         onChange={setKey}
         options={Object.entries(TOP_RANGES).map(([value, r]) => ({
           value,
-          label: value === "period" ? `Theo bộ lọc (${days} ngày)` : r.label,
+          label: value === "period" ? `Theo bộ lọc (${period.short})` : r.label,
         }))}
       />
     </Space>
@@ -648,17 +649,17 @@ function PageGrowth({ query, M, unit, onOpenPage }) {
   );
 }
 
-export default function ReelCharts({ reels, days, query, onOpenPage }) {
+export default function ReelCharts({ reels, period, query, onOpenPage }) {
   const [metricKey, setMetricKey] = useState("views");
   const M = METRICS[metricKey];
   const unit = M.label.toLowerCase();
   const [groupMetric, setGroupMetric] = useState("total");
 
   // One time window per card.
-  const gainRange = useRange(query, days);
-  const postedRange = useRange(query, days);
-  const groupRange = useRange(query, days);
-  const hourRange = useRange(query, days);
+  const gainRange = useRange(query, period);
+  const postedRange = useRange(query, period);
+  const groupRange = useRange(query, period);
+  const hourRange = useRange(query, period);
   const { data: gains = [], loading: gainsLoading } = useApi(`/analytics/view-gains?${gainRange.qs}`);
   const { data: groupGains = [] } = useApi(groupRange.isPeriod ? null : `/analytics/view-gains?${groupRange.qs}`);
   const posted = useRangeReels(postedRange, reels);
@@ -765,7 +766,7 @@ export default function ReelCharts({ reels, days, query, onOpenPage }) {
   const perGroupUnit = groupRange.isPeriod ? "reel" : "page";
 
   // 'period' = lifetime totals of reels posted in the filter; other windows = gains inside them.
-  const topRange = useRange(query, days);
+  const topRange = useRange(query, period);
   const topFrom = topRange.isPeriod ? null : topRange.from;
   const { data: topGains = [], loading: topLoading } = useApi(
     topFrom ? `/analytics/view-gains?${topRange.qs}` : null,

@@ -19,7 +19,7 @@ const pct = (v) => `${(v * 100).toFixed(1)}%`;
 
 // Detail of one page: totals for the chosen period (from `reels`, already filtered by the
 // parent), all-time numbers and the upcoming queue from the server, and the page's reels.
-export default function PageDrawer({ pageId, reels, days, onClose, onOpenReel }) {
+export default function PageDrawer({ pageId, reels, periodLabel, onClose, onOpenReel }) {
   const { data: s } = useApi(`/pages/${pageId}/summary`);
   const own = useMemo(
     () => reels.filter((r) => r.page_id === pageId).sort((a, b) => a.published_at - b.published_at),
@@ -90,7 +90,7 @@ export default function PageDrawer({ pageId, reels, days, onClose, onOpenReel })
         </Descriptions.Item>
       </Descriptions>
 
-      <Typography.Title level={5}>{days} ngày qua</Typography.Title>
+      <Typography.Title level={5}>{periodLabel.charAt(0).toUpperCase() + periodLabel.slice(1)}</Typography.Title>
       <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
         {[
           { title: 'Số reel', value: fmtNum(own.length) },
