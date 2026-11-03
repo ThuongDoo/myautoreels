@@ -1,8 +1,8 @@
 import { useMemo, useState } from 'react';
 import {
-  Card, Empty, Segmented, Select, Space, Switch, Table, Tag, Tooltip, Typography,
+  Button, Card, Empty, Segmented, Select, Space, Switch, Table, Tag, Tooltip, Typography,
 } from 'antd';
-import { FolderOutlined } from '@ant-design/icons';
+import { CalendarOutlined, FolderOutlined } from '@ant-design/icons';
 import { fmtNum, groupColor, useApi } from '../api.js';
 import { openScheduleWith } from '../prefill.js';
 import VideoDrawer from './VideoDrawer.jsx';
@@ -21,11 +21,12 @@ const byName = (a, b) => a.name.localeCompare(b.name, 'vi', { numeric: true });
 const compact = (v) => Intl.NumberFormat('vi-VN', { notation: 'compact' }).format(v);
 
 // One cell: posts of this video on this page (plus scheduled ones still waiting) and their views.
-// Clicking it opens the schedule form for this page and video.
-function Cell({ c, page, video }) {
+// Clicking it selects / unselects it for scheduling.
+function Cell({ c, page, video, selected }) {
+  const action = selected ? 'Đang chọn · bấm để bỏ chọn' : 'Bấm để chọn';
   const tip = c
-    ? `${page.name} · ${video.name}\n${c.done} lần đã đăng${c.upcoming ? `, ${c.upcoming} lần sắp đăng` : ''} · ${fmtNum(c.views)} views\nBấm để lên lịch thêm`
-    : `${page.name} · ${video.name}\nChưa đăng · bấm để lên lịch`;
+    ? `${page.name} · ${video.name}\n${c.done} lần đã đăng${c.upcoming ? `, ${c.upcoming} lần sắp đăng` : ''} · ${fmtNum(c.views)} views\n${action}`
+    : `${page.name} · ${video.name}\nChưa đăng · ${action}`;
   return (
     <Tooltip title={<span style={{ whiteSpace: 'pre-line' }}>{tip}</span>}>
       <div style={{ minHeight: 34, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
@@ -46,6 +47,28 @@ function Cell({ c, page, video }) {
 // Pages down the side, videos across the top grouped under their folder.
 export default function PageVideoMatrix() {
   const [openVideo, setOpenVideo] = useState(null);
+  // Picked cells, "pageId|videoId" -> { page, video }; kept while changing folder / group.
+  const [selected, setSelected] = useState(() => new Map());
+  // Toggles the given [page, video] cells together: all on if any is off, else all off.
+  const toggle = (cells) => setSelected((cur) => {
+    const next = new Map(cur);
+    const keys = cells.map(([p, v]) => `${p.id}|${v.id}`);
+    const allOn = keys.every((k) => next.has(k));
+    cells.forEach(([p, v], i) => {
+      if (allOn) next.delete(keys[i]);
+      else next.set(keys[i], { page: p, video: v });
+    });
+    return next;
+  });
+  const schedule = () => {
+    const items = [...selected.values()];
+    const videos = [...new Map(items.map((s) => [s.video.id, s.video])).values()];
+    openScheduleWith({
+      pageIds: [...new Set(items.map((s) => s.page.id))],
+      videos,
+      pairs: items.map((s) => ({ pageId: s.page.id, videoId: s.video.id })),
+    });
+  };
   const { data: folders = [] } = useApi('/video-folders');
   const { data: groups = [] } = useApi('/groups');
   const [folder, setFolder] = useState('');
@@ -126,7 +149,12 @@ export default function PageVideoMatrix() {
       fixed: 'left',
       width: 200,
       ellipsis: true,
-      render: (n) => <Tooltip title={n}>{n}</Tooltip>,
+      // Clicking the page name selects / unselects every visible video in its row.
+      render: (n, p) => (
+        <Tooltip title={`${n} · bấm để chọn cả dòng`}>
+          <a onClick={() => toggle(folderCols.flatMap((f) => f.videos.map((v) => [p, v])))}>{n}</a>
+        </Tooltip>
+      ),
     },
     {
       title: 'Tổng',
@@ -175,11 +203,19 @@ export default function PageVideoMatrix() {
           width: VIDEO_COL,
           align: 'center',
           onHeaderCell: headTint(f.tint[0]),
-          onCell: (p) => ({
-            style: { background: f.tint[0], cursor: 'pointer', padding: 2 },
-            onClick: () => openScheduleWith({ pageIds: [p.id], videos: [v] }),
-          }),
-          render: (_, p) => <Cell c={p.cells[v.id]} page={p} video={v} />,
+          onCell: (p) => {
+            const on = selected.has(`${p.id}|${v.id}`);
+            return {
+              style: {
+                background: on ? '#bae0ff' : f.tint[0],
+                boxShadow: on ? 'inset 0 0 0 2px #1677ff' : undefined,
+                cursor: 'pointer',
+                padding: 2,
+              },
+              onClick: () => toggle([[p, v]]),
+            };
+          },
+          render: (_, p) => <Cell c={p.cells[v.id]} page={p} video={v} selected={selected.has(`${p.id}|${v.id}`)} />,
         })),
       ],
     })),
@@ -204,8 +240,28 @@ export default function PageVideoMatrix() {
         Mỗi dòng là một page, mỗi cột là một video (gom và tô màu theo thư mục). Ô <Tag color="green" style={{ margin: 0 }}>2</Tag> là
         số lần page đã đăng video đó (kèm tổng views bên dưới), <Tag color="blue" style={{ margin: 0 }}>+1</Tag> là số lần đang chờ
         đăng. Cột "Tổng" bên trái ghi tổng số lần đăng của page và (số video khác nhau); cột "Tổng" đầu mỗi thư mục là tổng của
-        thư mục đó. <b>Bấm vào một ô để lên lịch video đó cho page đó</b>; bấm tên video để xem chi tiết.
+        thư mục đó. <b>Bấm vào ô để chọn</b> (chọn được nhiều ô, bấm tên page để chọn cả dòng), rồi bấm <b>Đặt lịch</b>; bấm tên video
+        để xem chi tiết.
       </Typography.Paragraph>
+      <div
+        style={{
+          position: 'sticky', top: 0, zIndex: 5, marginBottom: 12, padding: '8px 12px', borderRadius: 8,
+          background: selected.size ? '#e6f4ff' : '#fafafa', border: `1px solid ${selected.size ? '#91caff' : '#f0f0f0'}`,
+        }}
+      >
+        <Space wrap>
+          {selected.size ? (
+            <Typography.Text strong>
+              Đã chọn {selected.size} ô ({new Set([...selected.values()].map((s) => s.page.id)).size} page,{' '}
+              {new Set([...selected.values()].map((s) => s.video.id)).size} video)
+            </Typography.Text>
+          ) : <Typography.Text type="secondary">Chưa chọn ô nào</Typography.Text>}
+          <Button type="primary" icon={<CalendarOutlined />} disabled={!selected.size} onClick={schedule}>
+            Đặt lịch {selected.size ? `${selected.size} lượt` : ''}
+          </Button>
+          {selected.size > 0 && <Button onClick={() => setSelected(new Map())}>Bỏ chọn</Button>}
+        </Space>
+      </div>
       {!loading && data && (!data.pages.length || !videoCount) ? (
         <Empty description={!data.pages.length ? 'Nhóm này không có page nào' : 'Thư mục này không có video'} />
       ) : (

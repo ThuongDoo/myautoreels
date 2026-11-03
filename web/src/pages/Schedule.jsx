@@ -885,14 +885,17 @@ export default function Schedule() {
     };
   }, [enabledPages]);
 
-  // Opened from the page × video table: start with that page and video picked.
+  // Opened from the page × video table: start with those cells' pages and videos picked, and
+  // schedule exactly those page–video pairs.
+  const [pairs, setPairs] = useState(null);
   useEffect(() => {
     const p = takeSchedulePrefill();
     if (!p) return;
     for (const v of p.videos) videoCache.current[v.id] = v;
     setSelectedKeys(p.videos.map((v) => v.id));
     form.setFieldsValue({ pageIds: p.pageIds, skipUsed: 'none' });
-    message.info(`Đã chọn sẵn ${p.videos.length} video cho ${p.pageIds.length} page, chỉnh giờ đăng rồi bấm Tạo lịch đăng`);
+    if (p.pairs?.length) setPairs(p.pairs);
+    message.info(`Đã chọn sẵn ${p.pairs?.length || p.videos.length} lượt đăng, chỉnh giờ đăng rồi bấm Tạo lịch đăng`);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const { data: settings } = useApi('/settings');
@@ -918,10 +921,15 @@ export default function Schedule() {
   const pageIds = values.pageIds || [];
   const V = videos.length;
   const P = pageIds.length;
-  const total = values.mode === 'split' ? V : V * P;
-  const perPage = values.mode === 'split' ? Math.ceil(V / Math.max(P, 1)) : V;
+  // Pairs whose page and video are still picked (unpicking one drops its pairs).
+  const activePairs = pairs?.filter((p) => pageIds.includes(p.pageId) && videos.some((v) => v.id === p.videoId)) || null;
+  const pairsPerPage = activePairs
+    ? Math.max(0, ...Object.values(Object.groupBy(activePairs, (p) => p.pageId)).map((l) => l.length))
+    : 0;
+  const total = activePairs ? activePairs.length : values.mode === 'split' ? V : V * P;
+  const perPage = activePairs ? pairsPerPage : values.mode === 'split' ? Math.ceil(V / Math.max(P, 1)) : V;
   const slotTimes = buildSlotTimes(values, perPage);
-  const postsPerSlot = values.mode === 'split' ? Math.min(P, V) : P;
+  const postsPerSlot = activePairs ? new Set(activePairs.map((p) => p.pageId)).size : values.mode === 'split' ? Math.min(P, V) : P;
   const avgGapSec = ((values.gapMinSec || 0) + (values.gapMaxSec || 0)) / 2;
   const spreadMin = (Math.max(postsPerSlot - 1, 0) * avgGapSec) / 60;
   const slotCount = normalizeSlots(values.slots).length;
@@ -944,6 +952,7 @@ export default function Schedule() {
   const submit = async (v) => {
     if (foldersLoading) return message.warning('Đang tải danh sách video trong thư mục, chờ chút');
     if (!V) return message.warning(skippedCount ? 'Tất cả video đã chọn đều đã từng đăng' : 'Chưa chọn video nào');
+    if (activePairs && !activePairs.length) return message.warning('Không còn ô page × video nào được chọn');
     if (slotTimes.length < perPage) return message.warning('Chưa có khung giờ / giờ bắt đầu');
     if (checkCaption(v.captionTemplate).length) return message.error('Caption đang có lỗi, xem ngay dưới ô Caption');
     setSubmitting(true);
@@ -951,7 +960,8 @@ export default function Schedule() {
       const r = await api.post('/jobs/bulk', {
         videos: videos.map(({ id, name }) => ({ id, name })),
         pageIds: v.pageIds,
-        mode: v.mode,
+        mode: activePairs ? 'pairs' : v.mode,
+        pairs: activePairs || undefined,
         shuffle: v.shuffle,
         // Spare slots so the server can skip slots where a page already has a post.
         slotTimes: buildSlotTimes(values, perPage + SPARE_SLOTS),
@@ -977,6 +987,7 @@ export default function Schedule() {
         6,
       );
       onSelect([]);
+      setPairs(null);
     } catch (e) {
       message.error(e.message);
     } finally {
@@ -1091,14 +1102,30 @@ export default function Schedule() {
               </Radio.Group>
             </Form.Item>
 
-            <Form.Item label="Cách phân bổ" name="mode">
-              <Radio.Group>
-                <Space direction="vertical">
-                  <Radio value="all">Mỗi video đăng lên <b>tất cả</b> page đã chọn</Radio>
-                  <Radio value="split">Chia đều: mỗi page nhận video <b>khác nhau</b></Radio>
-                </Space>
-              </Radio.Group>
-            </Form.Item>
+            {activePairs ? (
+              <Alert
+                style={{ marginBottom: 16 }}
+                type="success"
+                showIcon
+                message={`Lên lịch đúng ${activePairs.length} ô đã chọn ở Page × video`}
+                description={(
+                  <>
+                    Mỗi ô là 1 lượt đăng của video đó lên page đó ({new Set(activePairs.map((p) => p.pageId)).size} page,{' '}
+                    {new Set(activePairs.map((p) => p.videoId)).size} video). Bỏ chọn page hoặc video ở trên sẽ bỏ các ô tương ứng.{' '}
+                    <a onClick={() => setPairs(null)}>Chuyển sang lên lịch thường</a>
+                  </>
+                )}
+              />
+            ) : (
+              <Form.Item label="Cách phân bổ" name="mode">
+                <Radio.Group>
+                  <Space direction="vertical">
+                    <Radio value="all">Mỗi video đăng lên <b>tất cả</b> page đã chọn</Radio>
+                    <Radio value="split">Chia đều: mỗi page nhận video <b>khác nhau</b></Radio>
+                  </Space>
+                </Radio.Group>
+              </Form.Item>
+            )}
             <Form.Item name="shuffle" valuePropName="checked" style={{ marginTop: -8 }}>
               <Checkbox>Trộn ngẫu nhiên thứ tự video (mỗi page một thứ tự khác nhau)</Checkbox>
             </Form.Item>
@@ -1177,7 +1204,9 @@ export default function Schedule() {
               <Alert
                 style={{ marginBottom: 16 }}
                 type={perDay > MAX_REELS_PER_DAY || spreadMin > minSlotGapMin ? 'warning' : 'info'}
-                message={values.mode === 'split'
+                message={activePairs
+                  ? `${activePairs.length} ô page × video = ${total} lịch đăng · tối đa ${perPage} reel/page`
+                  : values.mode === 'split'
                   ? `${V} video chia cho ${P} page = ${total} lịch đăng · ~${perPage} reel/page`
                   : `${V} video × ${P} page = ${total} lịch đăng · ${perPage} reel/page`}
                 description={(

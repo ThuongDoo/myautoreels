@@ -857,7 +857,10 @@ export function registerRoutes(app) {
       // hookMode: 'none' | 'random' (a random enabled hook from hookFileIds, [] = all, before each video).
       // hookVisual: 'tail' (picture = the video's last seconds, hook gives the sound) | 'own' (the hook's own picture).
       hookMode = 'none', hookFileIds = [], hookVisual = 'tail',
+      // mode 'pairs': exactly these [{ pageId, videoId }] (cells picked in the page × video table).
+      pairs = [],
     } = req.body || {};
+    if (mode === 'pairs' && !pairs.length) throw bad('Chưa chọn ô page × video nào');
     if (!videos.length) throw bad('Chưa chọn video');
     if (!pageIds.length) throw bad('Chưa chọn page');
     if (!slotTimes.length) throw bad('Chưa có khung giờ đăng');
@@ -896,7 +899,14 @@ export function registerRoutes(app) {
 
     const order = (list) => (shuffle ? shuffled(list) : list);
     const plan = [];
-    if (mode === 'split') {
+    if (mode === 'pairs') {
+      const byId = new Map(videos.map((v) => [v.id, v]));
+      for (const page of pages) {
+        const mine = pairs.filter((p) => p.pageId === page.id).map((p) => byId.get(p.videoId)).filter(Boolean);
+        order(mine).forEach((video) => plan.push({ page, video, slot: nextSlot(page.id) }));
+      }
+      if (!plan.length) throw bad('Các ô đã chọn không khớp page / video nào');
+    } else if (mode === 'split') {
       order(videos).forEach((video, i) => {
         const page = pages[i % pages.length];
         plan.push({ page, video, slot: nextSlot(page.id) });
