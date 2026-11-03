@@ -103,7 +103,12 @@ export default function Calendar() {
           return (
             <Tooltip
               title={list.map((j) => (
-                <div key={j.id}>{dayjs(j.scheduled_at).format('HH:mm')} · {STATUS[j.status]?.label || j.status} · {j.drive_file_name}</div>
+                <div key={j.id}>
+                  {dayjs(j.scheduled_at).format('HH:mm')} ·{' '}
+                  {j.external
+                    ? <>Đăng trên Facebook · {(j.drive_file_name || '(không caption)').replace(/\s+/g, ' ').slice(0, 50)}</>
+                    : <>{STATUS[j.status]?.label || j.status} · {j.drive_file_name}</>}
+                </div>
               ))}
             >
               <div style={{ padding: '8px 0', fontWeight: 600, cursor: 'default' }}>{list.length}</div>
@@ -131,6 +136,7 @@ export default function Calendar() {
           onChange={(v) => v && setRange(v)}
           disabledDate={(d) => range[0] && Math.abs(d.diff(range[0], 'day')) >= MAX_DAYS}
         />
+        <Button onClick={() => setRange([dayjs().subtract(6, 'day').startOf('day'), dayjs().startOf('day')])}>7 ngày qua</Button>
         <Button onClick={() => setRange([dayjs().startOf('day'), dayjs().add(6, 'day')])}>7 ngày tới</Button>
         <Button onClick={() => setRange([dayjs().startOf('day'), dayjs().add(13, 'day')])}>14 ngày tới</Button>
         <Button onClick={() => setRange([dayjs().startOf('day'), dayjs().add(29, 'day')])}>30 ngày tới</Button>
@@ -153,7 +159,10 @@ export default function Calendar() {
         <Tag color="#95de64" style={{ color: '#135200' }}>Đã đăng hết</Tag>
         <Tag color="#ff7875">Có video lỗi</Tag>
         <Tag style={{ background: '#fff1f0', color: '#cf1322' }}>– Không có lịch</Tag>
-        <Typography.Text type="secondary">Số trong ô = số reel trong ngày. Rê chuột để xem chi tiết.</Typography.Text>
+        <Typography.Text type="secondary">
+          Số trong ô = số reel trong ngày, kể cả reel đăng thẳng trên Facebook (hiện sau khi lên sóng và cập nhật số liệu).
+          Rê chuột để xem chi tiết.
+        </Typography.Text>
       </Space>
 
       <Table

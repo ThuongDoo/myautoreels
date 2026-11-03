@@ -841,9 +841,13 @@ export function registerRoutes(app) {
     const from = Number(req.query.from);
     const to = Number(req.query.to);
     if (!from || !to || to <= from) throw bad('Khoảng ngày không hợp lệ');
+    // Plus reels posted straight on Facebook (found by the stats refresh, no job behind them).
     return db.prepare(`
-      SELECT id, page_id, scheduled_at, status, drive_file_name FROM jobs
-      WHERE scheduled_at >= ? AND scheduled_at < ? AND status != 'canceled'
+      SELECT id, page_id, scheduled_at, status, drive_file_name, 0 AS external FROM jobs
+      WHERE scheduled_at >= ?1 AND scheduled_at < ?2 AND status != 'canceled'
+      UNION ALL
+      SELECT 'fb:' || video_id, page_id, published_at, 'done', caption, 1 FROM reels
+      WHERE job_id IS NULL AND published_at >= ?1 AND published_at < ?2
       ORDER BY scheduled_at
     `).all(from, to);
   });
