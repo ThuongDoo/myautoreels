@@ -655,26 +655,41 @@ export function registerRoutes(app) {
 
   // Drive file id -> folder path under the default video folder ('' = the folder itself),
   // so the libraries can show where each video came from. Cached; empty if Drive fails.
-  let videoFolders = { at: 0, map: new Map() };
-  async function videoFolderMap() {
+  // Rescanned every 10 minutes, or after a minute when a requested video isn't in it yet
+  // (scheduled after the last scan, or the scan came back incomplete).
+  let videoFolders = { at: 0, root: null, map: new Map(), files: [] };
+  let videoFoldersScan = null;
+  async function videoFolderMap(ids = []) {
     const root = getSetting('drive_folder_id');
     if (!root) return new Map();
-    if (Date.now() - videoFolders.at > 10 * 60_000) {
-      try {
-        const list = await listVideosRecursive(root);
-        videoFolders = { at: Date.now(), map: new Map(list.map((v) => [v.id, v.folder])) };
-      } catch (e) {
-        app.log.warn(`video folders: ${e.message}`);
-        videoFolders.at = Date.now() - 9 * 60_000; // retry in a minute
-      }
+    const age = Date.now() - videoFolders.at;
+    const missing = ids.some((id) => id && !videoFolders.map.has(id));
+    if (videoFolders.root !== root || age > 10 * 60_000 || (missing && age > 60_000)) {
+      videoFoldersScan ??= listVideosRecursive(root)
+        .then((list) => {
+          videoFolders = { at: Date.now(), root, map: new Map(list.map((v) => [v.id, v.folder])), files: list };
+        })
+        .catch((e) => {
+          app.log.warn(`video folders: ${e.message}`);
+          videoFolders = { ...videoFolders, at: Date.now(), root };
+        })
+        .finally(() => { videoFoldersScan = null; });
+      await videoFoldersScan;
     }
     return videoFolders.map;
   }
   const folderOf = (map, id) => (map.has(id) ? map.get(id) || '(thư mục gốc)' : null);
 
   app.get('/api/videos', async () => {
-    const folders = await videoFolderMap();
-    return videoRows.all().map((v) => ({ ...v, folder: folderOf(folders, v.id) }));
+    const rows = videoRows.all();
+    const folders = await videoFolderMap(rows.map((v) => v.id));
+    // Every video in the Drive folder is listed, including ones never scheduled yet.
+    const seen = new Set(rows.map((v) => v.id));
+    const unused = videoFolders.files.filter((f) => !seen.has(f.id)).map((f) => ({
+      id: f.id, name: f.name, posted: 0, upcoming: 0, failed: 0, pages: 0, first_posted: null, last_posted: null,
+      views: 0, interactions: 0, best_views: 0, viral: 0,
+    }));
+    return [...rows, ...unused].map((v) => ({ ...v, folder: folderOf(folders, v.id) }));
   });
   const videoRows = db.prepare(`
     SELECT j.drive_file_id AS id, MAX(j.drive_file_name) AS name,
@@ -907,7 +922,6 @@ export function registerRoutes(app) {
     args.unshift(since);
     if (req.query.to) { where.push('r.published_at < ?'); args.push(Number(req.query.to)); }
     if (req.query.viral === '1') where.push('r.viral = 1');
-    const folders = await videoFolderMap();
     const rows = db.prepare(`
       SELECT r.*, p.name AS page_name, p.group_name,
              j.drive_file_id, j.drive_file_name, j.music_file_id, j.music_file_name, j.hook_file_id, j.hook_file_name,
@@ -917,6 +931,7 @@ export function registerRoutes(app) {
       LEFT JOIN jobs j ON j.id = r.job_id
       WHERE ${where.join(' AND ')} ORDER BY r.views DESC LIMIT 3000
     `).all(...args);
+    const folders = await videoFolderMap(rows.map((r) => r.drive_file_id));
     return rows.map((r) => ({ ...r, video_folder: r.drive_file_id ? folderOf(folders, r.drive_file_id) : null }));
   });
 

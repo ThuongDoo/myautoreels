@@ -14,8 +14,8 @@ import dayjs from "dayjs";
 import { fmtNum, useApi } from "../api.js";
 import VideoDrawer from "./VideoDrawer.jsx";
 
-// Videos the server couldn't find under the default Drive folder (moved, deleted, or
-// scheduled from another folder).
+// Scheduled videos the server couldn't find under the default Drive folder (moved, deleted,
+// or scheduled from another folder).
 const NO_FOLDER = "__none__";
 const NO_FOLDER_LABEL = "Không rõ thư mục";
 
@@ -23,6 +23,7 @@ const FILTERS = {
   all: { label: "Tất cả", test: () => true },
   posted: { label: "Đã đăng", test: (v) => v.posted > 0 },
   upcoming: { label: "Sắp đăng", test: (v) => v.upcoming > 0 },
+  unused: { label: "Chưa dùng", test: (v) => !v.posted && !v.upcoming },
   viral: { label: "Có reel viral", test: (v) => v.viral > 0 },
   failed: { label: "Có lỗi", test: (v) => v.failed > 0 },
 };
@@ -88,7 +89,7 @@ export default function Videos() {
           dataSource={folderStats}
           pagination={false}
           scroll={{ x: 850 }}
-          locale={{ emptyText: "Chưa có video nào được lên lịch" }}
+          locale={{ emptyText: "Chưa có video nào" }}
           onRow={(f) => ({
             onClick: () => setFolderFilter((cur) => (cur === f.key ? "" : f.key)),
             style: {
@@ -144,8 +145,8 @@ export default function Videos() {
 
       <Card title={`Kho video (${data.length})`}>
         <Typography.Paragraph type="secondary">
-          Mỗi dòng là một video gốc trên Google Drive đã từng được lên lịch. Bấm
-          vào để xem video đó đã đăng lên những page nào và kết quả từng reel.
+          Tất cả video trong thư mục video mặc định trên Google Drive (kể cả thư mục con), cùng các video từng
+          lên lịch nhưng đã bị xóa/chuyển khỏi thư mục. Bấm vào để xem video đó đã đăng lên những page nào và kết quả từng reel.
         </Typography.Paragraph>
         <Space wrap size={[6, 8]} style={{ marginBottom: 12 }}>
           <Typography.Text type="secondary">Thư mục:</Typography.Text>
