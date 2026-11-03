@@ -3,7 +3,7 @@ import { App, Button, Input, Modal, Popconfirm, Space, Table, Tag, Typography } 
 import { DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
 import { api, groupColor } from '../api.js';
 
-// Shared by page groups (apiBase '/groups') and video groups ('/video-groups').
+// Used by page groups (apiBase '/groups').
 export function NewGroupInput({ apiBase = '/groups', onCreated, buttonText = 'Tạo nhóm', placeholder = 'Tên nhóm mới, ví dụ: Vẽ, Yoga' }) {
   const { message } = App.useApp();
   const [name, setName] = useState('');

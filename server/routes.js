@@ -653,50 +653,31 @@ export function registerRoutes(app) {
     return videos.map((v) => ({ ...v, posted: usage.get(v.id)?.posted || 0, upcoming: usage.get(v.id)?.upcoming || 0 }));
   }
 
-  // --- Video groups (same shape as page groups) ---
-  app.get('/api/video-groups', async () => db.prepare(`
-    SELECT g.name, COUNT(m.drive_file_id) AS total
-    FROM video_groups g LEFT JOIN video_meta m ON m.group_name = g.name
-    GROUP BY g.name ORDER BY g.name
-  `).all());
+  // Drive file id -> folder path under the default video folder ('' = the folder itself),
+  // so the libraries can show where each video came from. Cached; empty if Drive fails.
+  let videoFolders = { at: 0, map: new Map() };
+  async function videoFolderMap() {
+    const root = getSetting('drive_folder_id');
+    if (!root) return new Map();
+    if (Date.now() - videoFolders.at > 10 * 60_000) {
+      try {
+        const list = await listVideosRecursive(root);
+        videoFolders = { at: Date.now(), map: new Map(list.map((v) => [v.id, v.folder])) };
+      } catch (e) {
+        app.log.warn(`video folders: ${e.message}`);
+        videoFolders.at = Date.now() - 9 * 60_000; // retry in a minute
+      }
+    }
+    return videoFolders.map;
+  }
+  const folderOf = (map, id) => (map.has(id) ? map.get(id) || '(thư mục gốc)' : null);
 
-  app.post('/api/video-groups', async (req) => {
-    const name = req.body?.name?.trim();
-    if (!name) throw bad('Nhập tên nhóm');
-    if (db.prepare('SELECT 1 FROM video_groups WHERE name = ?').get(name)) throw bad(`Nhóm "${name}" đã có`);
-    db.prepare('INSERT INTO video_groups (name, created_at) VALUES (?, ?)').run(name, Date.now());
-    return { name };
+  app.get('/api/videos', async () => {
+    const folders = await videoFolderMap();
+    return videoRows.all().map((v) => ({ ...v, folder: folderOf(folders, v.id) }));
   });
-
-  // Rename (merging if the new name exists), or delete when `to` is empty — videos become ungrouped.
-  app.post('/api/video-groups/rename', async (req) => {
-    const from = req.body?.from;
-    const to = req.body?.to?.trim() || null;
-    if (!from) throw bad('Thiếu tên nhóm');
-    let changed = 0;
-    transaction(() => {
-      db.prepare('DELETE FROM video_groups WHERE name = ?').run(from);
-      if (to) db.prepare('INSERT OR IGNORE INTO video_groups (name, created_at) VALUES (?, ?)').run(to, Date.now());
-      changed = Number(db.prepare('UPDATE video_meta SET group_name = ? WHERE group_name = ?').run(to, from).changes);
-    });
-    return { changed };
-  });
-
-  app.post('/api/videos/group', async (req) => {
-    const { ids = [], group_name } = req.body || {};
-    const name = group_name?.trim() || null;
-    transaction(() => {
-      if (name) db.prepare('INSERT OR IGNORE INTO video_groups (name, created_at) VALUES (?, ?)').run(name, Date.now());
-      const stmt = db.prepare(`INSERT INTO video_meta (drive_file_id, group_name) VALUES (?, ?)
-                               ON CONFLICT(drive_file_id) DO UPDATE SET group_name = excluded.group_name`);
-      for (const id of ids) stmt.run(id, name);
-    });
-    return { ok: true };
-  });
-
-  app.get('/api/videos', async () => db.prepare(`
+  const videoRows = db.prepare(`
     SELECT j.drive_file_id AS id, MAX(j.drive_file_name) AS name,
-           (SELECT group_name FROM video_meta m WHERE m.drive_file_id = j.drive_file_id) AS group_name,
            SUM(j.status = 'done') AS posted,
            SUM(j.status IN ${ACTIVE}) AS upcoming,
            SUM(j.status = 'failed') AS failed,
@@ -711,7 +692,7 @@ export function registerRoutes(app) {
     WHERE j.status != 'canceled'
     GROUP BY j.drive_file_id
     ORDER BY views DESC, last_posted DESC
-  `).all());
+  `);
 
   app.get('/api/videos/:fileId/posts', async (req) => db.prepare(`
     SELECT j.id AS job_id, j.page_id, p.name AS page_name, p.group_name, j.status, j.scheduled_at, j.published_at,
@@ -926,7 +907,8 @@ export function registerRoutes(app) {
     args.unshift(since);
     if (req.query.to) { where.push('r.published_at < ?'); args.push(Number(req.query.to)); }
     if (req.query.viral === '1') where.push('r.viral = 1');
-    return db.prepare(`
+    const folders = await videoFolderMap();
+    const rows = db.prepare(`
       SELECT r.*, p.name AS page_name, p.group_name,
              j.drive_file_id, j.drive_file_name, j.music_file_id, j.music_file_name, j.hook_file_id, j.hook_file_name,
              (SELECT COUNT(*) FROM jobs j2 WHERE j2.drive_file_id = j.drive_file_id AND j2.status = 'done') AS source_posts
@@ -935,6 +917,7 @@ export function registerRoutes(app) {
       LEFT JOIN jobs j ON j.id = r.job_id
       WHERE ${where.join(' AND ')} ORDER BY r.views DESC LIMIT 3000
     `).all(...args);
+    return rows.map((r) => ({ ...r, video_folder: r.drive_file_id ? folderOf(folders, r.drive_file_id) : null }));
   });
 
   // Views (`gain`) and likes / comments / shares gained per hour (UTC hour buckets; the browser groups them into local days).

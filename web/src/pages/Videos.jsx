@@ -1,26 +1,23 @@
 import { useMemo, useState } from "react";
 import {
-  App,
-  Button,
   Card,
-  Divider,
   Input,
   Segmented,
-  Select,
   Space,
   Table,
   Tag,
   Tooltip,
   Typography,
 } from "antd";
-import { FireOutlined, SettingOutlined } from "@ant-design/icons";
+import { FireOutlined, FolderOutlined } from "@ant-design/icons";
 import dayjs from "dayjs";
-import { api, fmtNum, groupColor, useApi } from "../api.js";
+import { fmtNum, useApi } from "../api.js";
 import VideoDrawer from "./VideoDrawer.jsx";
-import { GroupManagerModal, NewGroupInput } from "./GroupControls.jsx";
 
-const NO_GROUP = "__none__";
-const NO_GROUP_LABEL = "Chưa có nhóm";
+// Videos the server couldn't find under the default Drive folder (moved, deleted, or
+// scheduled from another folder).
+const NO_FOLDER = "__none__";
+const NO_FOLDER_LABEL = "Không rõ thư mục";
 
 const FILTERS = {
   all: { label: "Tất cả", test: () => true },
@@ -32,144 +29,75 @@ const FILTERS = {
 
 const pct = (v) => `${(v * 100).toFixed(1)}%`;
 const avgPerPost = (r) => (r.posted ? r.views / r.posted : 0);
+const folderKey = (v) => v.folder || NO_FOLDER;
 
-// Clicks on the checkbox or the inline group picker must not open the drawer.
-const stop = (e) => e.stopPropagation();
+function FolderName({ name }) {
+  return name === NO_FOLDER_LABEL ? (
+    <Typography.Text type="secondary">{name}</Typography.Text>
+  ) : (
+    <Space size={6}>
+      <FolderOutlined style={{ color: "#f5a623" }} />
+      {name}
+    </Space>
+  );
+}
 
 export default function Videos() {
-  const { message } = App.useApp();
-  const { data = [], loading, reload } = useApi("/videos", {
-    refreshMs: 60_000,
-  });
-  const { data: groupList = [], reload: reloadGroups } =
-    useApi("/video-groups");
+  const { data = [], loading } = useApi("/videos", { refreshMs: 60_000 });
   const [filter, setFilter] = useState("all");
-  const [groupFilter, setGroupFilter] = useState("");
+  const [folderFilter, setFolderFilter] = useState("");
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(null);
-  const [selected, setSelected] = useState([]);
-  const [groupPickerOpen, setGroupPickerOpen] = useState(false);
-  const [showGroups, setShowGroups] = useState(false);
 
-  const setGroup = async (ids, group_name, successText) => {
-    try {
-      await api.post("/videos/group", { ids, group_name });
-      if (successText) message.success(successText);
-      reload({ silent: true });
-      reloadGroups({ silent: true });
-      return true;
-    } catch (e) {
-      message.error(e.message);
-      return false;
-    }
-  };
-
-  const moveToGroup = async (name) => {
-    setGroupPickerOpen(false);
-    if (
-      await setGroup(
-        selected,
-        name,
-        `Đã chuyển ${selected.length} video vào nhóm "${name}"`,
-      )
-    ) {
-      setSelected([]);
-    }
-  };
-
-  // One row per group (plus "no group"), summed from the video rows.
-  const groupStats = useMemo(() => {
-    const map = new Map(
-      groupList.map((g) => [
-        g.name,
-        { key: g.name, name: g.name, videos: 0, posted: 0, views: 0, interactions: 0, best: 0, viral: 0, upcoming: 0 },
-      ]),
-    );
+  // One row per Drive folder the videos came from, summed from the video rows.
+  const folderStats = useMemo(() => {
+    const map = new Map();
     for (const v of data) {
-      const key = v.group_name || NO_GROUP;
-      if (!map.has(key)) {
-        map.set(key, { key, name: v.group_name || NO_GROUP_LABEL, videos: 0, posted: 0, views: 0, interactions: 0, best: 0, viral: 0, upcoming: 0 });
-      }
-      const g = map.get(key);
-      g.videos++;
-      g.posted += v.posted;
-      g.upcoming += v.upcoming;
-      g.views += v.views;
-      g.interactions += v.interactions;
-      g.best = Math.max(g.best, v.best_views);
-      g.viral += v.viral;
+      const key = folderKey(v);
+      const f = map.get(key) || {
+        key, name: v.folder || NO_FOLDER_LABEL, videos: 0, posted: 0, views: 0, interactions: 0, best: 0, viral: 0, upcoming: 0,
+      };
+      f.videos++;
+      f.posted += v.posted;
+      f.upcoming += v.upcoming;
+      f.views += v.views;
+      f.interactions += v.interactions;
+      f.best = Math.max(f.best, v.best_views);
+      f.viral += v.viral;
+      map.set(key, f);
     }
     return [...map.values()]
-      .map((g) => ({ ...g, eng: g.views ? g.interactions / g.views : 0 }))
+      .map((f) => ({ ...f, eng: f.views ? f.interactions / f.views : 0 }))
       .sort((a, b) => b.views - a.views);
-  }, [data, groupList]);
-
-  const ungroupedCount = data.filter((v) => !v.group_name).length;
-  const groupOptions = groupList.map((g) => ({
-    value: g.name,
-    label: (
-      <Space>
-        <Tag color={groupColor(g.name)} style={{ margin: 0 }}>
-          {g.name}
-        </Tag>
-        <Typography.Text type="secondary">{g.total} video</Typography.Text>
-      </Space>
-    ),
-  }));
+  }, [data]);
 
   const needle = q.toLowerCase();
   const rows = data.filter(
     (v) =>
       FILTERS[filter].test(v) &&
-      (!groupFilter || (v.group_name || NO_GROUP) === groupFilter) &&
+      (!folderFilter || folderKey(v) === folderFilter) &&
       (!needle || (v.name || "").toLowerCase().includes(needle)),
   );
 
   return (
     <Space direction="vertical" size={16} style={{ width: "100%" }}>
-      <Card
-        size="small"
-        title="Thống kê theo nhóm video"
-        extra={
-          <Button
-            size="small"
-            icon={<SettingOutlined />}
-            onClick={() => setShowGroups(true)}
-          >
-            Tạo / quản lý nhóm
-          </Button>
-        }
-      >
+      <Card size="small" title="Thống kê theo thư mục">
         <Table
           rowKey="key"
           size="small"
-          dataSource={groupStats}
+          dataSource={folderStats}
           pagination={false}
           scroll={{ x: 850 }}
-          locale={{
-            emptyText:
-              'Chưa có nhóm nào. Bấm "Tạo / quản lý nhóm", rồi tick chọn video bên dưới để chuyển vào nhóm.',
-          }}
-          onRow={(g) => ({
-            onClick: () => setGroupFilter((cur) => (cur === g.key ? "" : g.key)),
+          locale={{ emptyText: "Chưa có video nào được lên lịch" }}
+          onRow={(f) => ({
+            onClick: () => setFolderFilter((cur) => (cur === f.key ? "" : f.key)),
             style: {
               cursor: "pointer",
-              background: groupFilter === g.key ? "rgba(42,120,214,0.08)" : undefined,
+              background: folderFilter === f.key ? "rgba(42,120,214,0.08)" : undefined,
             },
           })}
           columns={[
-            {
-              title: "Nhóm",
-              dataIndex: "name",
-              render: (n, g) =>
-                g.key === NO_GROUP ? (
-                  <Typography.Text type="secondary">{n}</Typography.Text>
-                ) : (
-                  <Tag color={groupColor(n)} style={{ margin: 0 }}>
-                    {n}
-                  </Tag>
-                ),
-            },
+            { title: "Thư mục", dataIndex: "name", render: (n) => <FolderName name={n} /> },
             { title: "Số video", dataIndex: "videos", width: 90, align: "right", sorter: (a, b) => a.videos - b.videos },
             { title: "Đã đăng", dataIndex: "posted", width: 95, align: "right", sorter: (a, b) => a.posted - b.posted, render: (n) => `${n} lần` },
             { title: "Sắp đăng", dataIndex: "upcoming", width: 95, align: "right", sorter: (a, b) => a.upcoming - b.upcoming, render: (n) => n || "-" },
@@ -186,7 +114,7 @@ export default function Videos() {
               width: 125,
               align: "right",
               sorter: (a, b) => avgPerPost(a) - avgPerPost(b),
-              render: (_, g) => (g.posted ? fmtNum(Math.round(avgPerPost(g))) : "-"),
+              render: (_, f) => (f.posted ? fmtNum(Math.round(avgPerPost(f))) : "-"),
             },
             { title: "Reel tốt nhất", dataIndex: "best", width: 115, align: "right", sorter: (a, b) => a.best - b.best, render: fmtNum },
             {
@@ -207,9 +135,9 @@ export default function Videos() {
             },
           ]}
         />
-        {groupStats.length > 0 && (
+        {folderStats.length > 0 && (
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            Bấm vào một nhóm để lọc danh sách video bên dưới.
+            Thư mục tính theo thư mục video mặc định trong Cài đặt. Bấm vào một thư mục để lọc danh sách bên dưới.
           </Typography.Text>
         )}
       </Card>
@@ -220,30 +148,19 @@ export default function Videos() {
           vào để xem video đó đã đăng lên những page nào và kết quả từng reel.
         </Typography.Paragraph>
         <Space wrap size={[6, 8]} style={{ marginBottom: 12 }}>
-          <Typography.Text type="secondary">Nhóm:</Typography.Text>
-          <Tag.CheckableTag
-            checked={!groupFilter}
-            onChange={() => setGroupFilter("")}
-          >
+          <Typography.Text type="secondary">Thư mục:</Typography.Text>
+          <Tag.CheckableTag checked={!folderFilter} onChange={() => setFolderFilter("")}>
             Tất cả ({data.length})
           </Tag.CheckableTag>
-          {groupList.map((g) => (
+          {folderStats.map((f) => (
             <Tag.CheckableTag
-              key={g.name}
-              checked={groupFilter === g.name}
-              onChange={(on) => setGroupFilter(on ? g.name : "")}
+              key={f.key}
+              checked={folderFilter === f.key}
+              onChange={(on) => setFolderFilter(on ? f.key : "")}
             >
-              {g.name} ({g.total})
+              {f.name} ({f.videos})
             </Tag.CheckableTag>
           ))}
-          {ungroupedCount > 0 && (
-            <Tag.CheckableTag
-              checked={groupFilter === NO_GROUP}
-              onChange={(on) => setGroupFilter(on ? NO_GROUP : "")}
-            >
-              {NO_GROUP_LABEL} ({ungroupedCount})
-            </Tag.CheckableTag>
-          )}
         </Space>
         <Space wrap style={{ marginBottom: 16 }}>
           <Segmented
@@ -261,63 +178,6 @@ export default function Videos() {
             style={{ width: 240 }}
           />
         </Space>
-        <Space wrap style={{ marginBottom: 16, display: "flex" }}>
-          {selected.length > 0 ? (
-            <>
-              <Typography.Text strong>
-                Đã chọn {selected.length} video:
-              </Typography.Text>
-              <Select
-                placeholder="Chuyển vào nhóm..."
-                style={{ width: 230 }}
-                value={null}
-                open={groupPickerOpen}
-                onOpenChange={setGroupPickerOpen}
-                options={groupOptions}
-                onChange={moveToGroup}
-                notFoundContent="Chưa có nhóm nào"
-                popupRender={(menu) => (
-                  <>
-                    {menu}
-                    <Divider style={{ margin: "8px 0" }} />
-                    <div style={{ padding: "0 8px 4px" }}>
-                      <NewGroupInput
-                        apiBase="/video-groups"
-                        placeholder="Tên nhóm mới, ví dụ: Hài, Mẹo vặt"
-                        buttonText="Tạo & chuyển"
-                        onCreated={(n) => {
-                          reloadGroups({ silent: true });
-                          moveToGroup(n);
-                        }}
-                      />
-                    </div>
-                  </>
-                )}
-              />
-              <Button
-                onClick={async () => {
-                  if (
-                    await setGroup(
-                      selected,
-                      null,
-                      `Đã bỏ ${selected.length} video khỏi nhóm`,
-                    )
-                  )
-                    setSelected([]);
-                }}
-              >
-                Bỏ khỏi nhóm
-              </Button>
-              <Button type="link" onClick={() => setSelected([])}>
-                Bỏ chọn
-              </Button>
-            </>
-          ) : (
-            <Typography.Text type="secondary">
-              Tick chọn video để chuyển vào nhóm.
-            </Typography.Text>
-          )}
-        </Space>
         <Table
           rowKey="id"
           size="middle"
@@ -325,12 +185,6 @@ export default function Videos() {
           dataSource={rows}
           pagination={{ pageSize: 50, showSizeChanger: false }}
           scroll={{ x: 1130 }}
-          rowSelection={{
-            selectedRowKeys: selected,
-            onChange: setSelected,
-            preserveSelectedRowKeys: true,
-            onCell: () => ({ onClick: stop }),
-          }}
           onRow={(v) => ({
             onClick: () => setOpen(v),
             style: { cursor: "pointer" },
@@ -353,29 +207,12 @@ export default function Videos() {
               ),
             },
             {
-              title: "Nhóm",
-              dataIndex: "group_name",
-              width: 180,
-              sorter: (a, b) =>
-                (a.group_name || "").localeCompare(b.group_name || ""),
-              onCell: () => ({ onClick: stop }),
-              render: (g, v) => (
-                <Select
-                  size="small"
-                  variant="borderless"
-                  style={{ width: "100%" }}
-                  value={g || null}
-                  placeholder="— Chưa có nhóm —"
-                  allowClear
-                  options={groupOptions}
-                  labelRender={({ value }) => (
-                    <Tag color={groupColor(value)} style={{ margin: 0 }}>
-                      {value}
-                    </Tag>
-                  )}
-                  onChange={(name) => setGroup([v.id], name || null)}
-                />
-              ),
+              title: "Thư mục",
+              dataIndex: "folder",
+              width: 200,
+              ellipsis: true,
+              sorter: (a, b) => (a.folder || "").localeCompare(b.folder || "", "vi"),
+              render: (f) => <FolderName name={f || NO_FOLDER_LABEL} />,
             },
             {
               title: "Đã đăng",
@@ -446,23 +283,6 @@ export default function Videos() {
         />
         {open && <VideoDrawer video={open} onClose={() => setOpen(null)} />}
       </Card>
-
-      {showGroups && (
-        <GroupManagerModal
-          apiBase="/video-groups"
-          title="Quản lý nhóm video"
-          unit="video"
-          placeholder="Tên nhóm mới, ví dụ: Hài, Mẹo vặt"
-          help='Sau khi tạo nhóm: tick chọn video ở bảng "Kho video", rồi chọn nhóm ở ô "Chuyển vào nhóm". Mỗi video thuộc tối đa 1 nhóm.'
-          groups={groupList}
-          onClose={() => setShowGroups(false)}
-          onChanged={() => {
-            setGroupFilter("");
-            reload({ silent: true });
-            reloadGroups({ silent: true });
-          }}
-        />
-      )}
     </Space>
   );
 }

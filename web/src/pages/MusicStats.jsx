@@ -1,12 +1,12 @@
 import { useMemo, useState } from 'react';
 import {
-  Alert, Button, Card, Col, Collapse, Empty, Row, Segmented, Space, Statistic, Table, Tag, Typography,
+  Alert, Button, Card, Col, Collapse, Empty, Row, Segmented, Space, Statistic, Table, Typography,
 } from 'antd';
-import { FireOutlined, ReloadOutlined } from '@ant-design/icons';
+import { FireOutlined, FolderOutlined, ReloadOutlined } from '@ant-design/icons';
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import dayjs from 'dayjs';
 import {
-  fmtNum, fmtSec, groupColor, musicCode, musicFileFor, musicKey, parseVideoName, useApi,
+  fmtNum, fmtSec, musicCode, musicFileFor, musicKey, parseVideoName, useApi,
 } from '../api.js';
 
 const UNKNOWN = '(không rõ)';
@@ -44,7 +44,7 @@ export default function MusicStats({ reels, periodLabel, onOpenReel }) {
       const key = musicKey(code);
       const m = map.get(key) || {
         code, views: 0, reels: 0, likes: 0, comments: 0, shares: 0, viral: 0,
-        pages: new Set(), groups: new Set(), videos: new Map(), list: [],
+        pages: new Set(), videos: new Map(), list: [],
       };
       m.views += r.views;
       m.reels++;
@@ -53,7 +53,6 @@ export default function MusicStats({ reels, periodLabel, onOpenReel }) {
       m.shares += r.shares;
       if (r.viral) m.viral++;
       m.pages.add(r.page_id);
-      if (info.group) m.groups.add(info.group);
       const vid = r.drive_file_id || r.video_id;
       const v = m.videos.get(vid) || { id: vid, name: r.drive_file_name || r.caption || '(không rõ)', ...info, reels: 0, views: 0 };
       v.reels++;
@@ -68,7 +67,6 @@ export default function MusicStats({ reels, periodLabel, onOpenReel }) {
         file: m.code === UNKNOWN ? null : musicFileFor(m.code, files),
         avg: m.views / m.reels,
         eng: m.views ? (m.likes + m.comments + m.shares) / m.views : 0,
-        groupList: [...m.groups].sort(),
       }))
       .sort((a, b) => b.views - a.views);
   }, [reels, files]);
@@ -172,8 +170,13 @@ export default function MusicStats({ reels, periodLabel, onOpenReel }) {
                     render: (t) => dayjs(t).format('DD/MM HH:mm'),
                   },
                   { title: 'Page', dataIndex: 'page_name', width: 160, ellipsis: true },
-                  { title: 'Nhóm', dataIndex: 'group', width: 110, render: (g) => (g ? <Tag color={groupColor(g)}>{g}</Tag> : '-') },
-                  { title: 'STT', dataIndex: 'index', width: 60 },
+                  {
+                    title: 'Thư mục video',
+                    dataIndex: 'video_folder',
+                    width: 150,
+                    ellipsis: true,
+                    render: (f) => f || <Typography.Text type="secondary">-</Typography.Text>,
+                  },
                   {
                     title: 'Video',
                     dataIndex: 'drive_file_name',
@@ -208,12 +211,18 @@ export default function MusicStats({ reels, periodLabel, onOpenReel }) {
               dataIndex: 'code',
               width: 110,
               fixed: 'left',
-              render: (c, m) => (c === UNKNOWN ? <Typography.Text type="secondary">{c}</Typography.Text> : (
-                <>
-                  <Typography.Text strong>{c}</Typography.Text>
-                  {m.file?.folder && <div><Typography.Text type="secondary" style={{ fontSize: 12 }}>{m.file.folder}</Typography.Text></div>}
-                </>
-              )),
+              render: (c) => (c === UNKNOWN ? <Typography.Text type="secondary">{c}</Typography.Text> : <Typography.Text strong>{c}</Typography.Text>),
+            },
+            {
+              title: 'Thư mục nhạc',
+              key: 'folder',
+              width: 170,
+              ellipsis: true,
+              sorter: (a, b) => (a.file?.folder || '').localeCompare(b.file?.folder || '', 'vi'),
+              render: (_, m) => {
+                if (!m.file) return <Typography.Text type="secondary">-</Typography.Text>;
+                return <Space size={6}><FolderOutlined style={{ color: '#f5a623' }} />{m.file.folder || '(thư mục gốc)'}</Space>;
+              },
             },
             {
               title: 'Nghe nhạc',
@@ -227,12 +236,6 @@ export default function MusicStats({ reels, periodLabel, onOpenReel }) {
                 if (!m.file) return <Typography.Text type="warning">Không tìm thấy trong thư mục</Typography.Text>;
                 return <span title={m.file.name}><Player file={m.file} /></span>;
               },
-            },
-            {
-              title: 'Nhóm video',
-              key: 'groups',
-              width: 160,
-              render: (_, m) => m.groupList.map((g) => <Tag key={g} color={groupColor(g)} style={{ marginBottom: 2 }}>{g}</Tag>),
             },
             { title: 'Video', key: 'videos', width: 70, align: 'right', sorter: (a, b) => a.videos.size - b.videos.size, render: (_, m) => m.videos.size },
             { title: 'Reel', dataIndex: 'reels', width: 70, align: 'right', sorter: (a, b) => a.reels - b.reels },
