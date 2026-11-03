@@ -9,6 +9,7 @@ import {
 import dayjs from 'dayjs';
 import { api, fmtSize, fmtSec, groupColor, useApi } from '../api.js';
 import { checkCaption, renderCaption } from '../caption.js';
+import { takeSchedulePrefill } from '../prefill.js';
 import { Preview as HookPreview } from './Hooks.jsx';
 import LibraryBrowser, { filesOf } from './LibraryBrowser.jsx';
 
@@ -883,6 +884,16 @@ export default function Schedule() {
       ],
     };
   }, [enabledPages]);
+
+  // Opened from the page × video table: start with that page and video picked.
+  useEffect(() => {
+    const p = takeSchedulePrefill();
+    if (!p) return;
+    for (const v of p.videos) videoCache.current[v.id] = v;
+    setSelectedKeys(p.videos.map((v) => v.id));
+    form.setFieldsValue({ pageIds: p.pageIds, skipUsed: 'none' });
+    message.info(`Đã chọn sẵn ${p.videos.length} video cho ${p.pageIds.length} page, chỉnh giờ đăng rồi bấm Tạo lịch đăng`);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const { data: settings } = useApi('/settings');
   const { data: music, loading: musicLoading } = useApi('/music');

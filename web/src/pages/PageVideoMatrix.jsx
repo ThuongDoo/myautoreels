@@ -4,6 +4,8 @@ import {
 } from 'antd';
 import { FolderOutlined } from '@ant-design/icons';
 import { fmtNum, groupColor, useApi } from '../api.js';
+import { openScheduleWith } from '../prefill.js';
+import VideoDrawer from './VideoDrawer.jsx';
 
 const NO_GROUP = '__none__';
 
@@ -16,21 +18,34 @@ const folderLabel = (f) => f || '(thư mục gốc)';
 const VIDEO_COL = 86;
 const byName = (a, b) => a.name.localeCompare(b.name, 'vi', { numeric: true });
 
-// One cell: posts of this video on this page, plus scheduled ones still waiting.
-function Cell({ c }) {
-  if (!c) return <Typography.Text type="secondary">·</Typography.Text>;
+const compact = (v) => Intl.NumberFormat('vi-VN', { notation: 'compact' }).format(v);
+
+// One cell: posts of this video on this page (plus scheduled ones still waiting) and their views.
+// Clicking it opens the schedule form for this page and video.
+function Cell({ c, page, video }) {
+  const tip = c
+    ? `${page.name} · ${video.name}\n${c.done} lần đã đăng${c.upcoming ? `, ${c.upcoming} lần sắp đăng` : ''} · ${fmtNum(c.views)} views\nBấm để lên lịch thêm`
+    : `${page.name} · ${video.name}\nChưa đăng · bấm để lên lịch`;
   return (
-    <Tooltip title={`${c.done} lần đã đăng${c.upcoming ? `, ${c.upcoming} lần sắp đăng` : ''} · ${fmtNum(c.views)} views`}>
-      <Space size={2}>
-        {c.done > 0 && <Tag color="green" style={{ margin: 0 }}>{c.done}</Tag>}
-        {c.upcoming > 0 && <Tag color="blue" style={{ margin: 0 }}>+{c.upcoming}</Tag>}
-      </Space>
+    <Tooltip title={<span style={{ whiteSpace: 'pre-line' }}>{tip}</span>}>
+      <div style={{ minHeight: 34, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+        {c ? (
+          <>
+            <Space size={2}>
+              {c.done > 0 && <Tag color="green" style={{ margin: 0 }}>{c.done}</Tag>}
+              {c.upcoming > 0 && <Tag color="blue" style={{ margin: 0 }}>+{c.upcoming}</Tag>}
+            </Space>
+            {c.done > 0 && <Typography.Text type="secondary" style={{ fontSize: 11, lineHeight: 1.3 }}>{compact(c.views)} view</Typography.Text>}
+          </>
+        ) : <Typography.Text type="secondary">·</Typography.Text>}
+      </div>
     </Tooltip>
   );
 }
 
 // Pages down the side, videos across the top grouped under their folder.
-export default function PageVideoMatrix({ onOpenVideo }) {
+export default function PageVideoMatrix() {
+  const [openVideo, setOpenVideo] = useState(null);
   const { data: folders = [] } = useApi('/video-folders');
   const { data: groups = [] } = useApi('/groups');
   const [folder, setFolder] = useState('');
@@ -150,7 +165,7 @@ export default function PageVideoMatrix({ onOpenVideo }) {
           title: (
             <Tooltip title={`${folderLabel(f.name)} / ${v.name}`}>
               <a
-                onClick={() => onOpenVideo({ id: v.id, name: v.name })}
+                onClick={() => setOpenVideo({ id: v.id, name: v.name })}
                 style={{ display: 'block', maxWidth: VIDEO_COL - 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
               >
                 {v.name.replace(/\.[^.]+$/, '')}
@@ -160,8 +175,11 @@ export default function PageVideoMatrix({ onOpenVideo }) {
           width: VIDEO_COL,
           align: 'center',
           onHeaderCell: headTint(f.tint[0]),
-          onCell: cellTint(f.tint[0]),
-          render: (_, p) => <Cell c={p.cells[v.id]} />,
+          onCell: (p) => ({
+            style: { background: f.tint[0], cursor: 'pointer', padding: 2 },
+            onClick: () => openScheduleWith({ pageIds: [p.id], videos: [v] }),
+          }),
+          render: (_, p) => <Cell c={p.cells[v.id]} page={p} video={v} />,
         })),
       ],
     })),
@@ -169,7 +187,7 @@ export default function PageVideoMatrix({ onOpenVideo }) {
   const videoCount = folderCols.reduce((s, f) => s + f.videos.length, 0);
 
   return (
-    <Card title="Page đã đăng video nào">
+    <Card title="Page × video: page nào đã đăng video nào">
       <Space wrap style={{ marginBottom: 12 }}>
         <Typography.Text>Thư mục:</Typography.Text>
         <Select style={{ width: 260 }} value={folder} onChange={setFolder} options={folderOptions} showSearch optionFilterProp="value" />
@@ -184,9 +202,9 @@ export default function PageVideoMatrix({ onOpenVideo }) {
       </Space>
       <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
         Mỗi dòng là một page, mỗi cột là một video (gom và tô màu theo thư mục). Ô <Tag color="green" style={{ margin: 0 }}>2</Tag> là
-        số lần page đã đăng video đó, <Tag color="blue" style={{ margin: 0 }}>+1</Tag> là số lần đang chờ đăng. Cột "Tổng" bên trái ghi
-        tổng số lần đăng của page và (số video khác nhau); cột "Tổng" đầu mỗi thư mục là tổng của thư mục đó. Rê chuột vào tên video
-        hoặc ô để xem chi tiết, bấm tên video để mở.
+        số lần page đã đăng video đó (kèm tổng views bên dưới), <Tag color="blue" style={{ margin: 0 }}>+1</Tag> là số lần đang chờ
+        đăng. Cột "Tổng" bên trái ghi tổng số lần đăng của page và (số video khác nhau); cột "Tổng" đầu mỗi thư mục là tổng của
+        thư mục đó. <b>Bấm vào một ô để lên lịch video đó cho page đó</b>; bấm tên video để xem chi tiết.
       </Typography.Paragraph>
       {!loading && data && (!data.pages.length || !videoCount) ? (
         <Empty description={!data.pages.length ? 'Nhóm này không có page nào' : 'Thư mục này không có video'} />
@@ -223,6 +241,7 @@ export default function PageVideoMatrix({ onOpenVideo }) {
           )}
         />
       )}
+      {openVideo && <VideoDrawer video={openVideo} onClose={() => setOpenVideo(null)} />}
     </Card>
   );
 }

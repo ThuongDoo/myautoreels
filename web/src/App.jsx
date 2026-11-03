@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Layout, Menu } from 'antd';
 import {
-  CalendarOutlined, CustomerServiceOutlined, FireOutlined, TableOutlined, FlagOutlined, PlaySquareOutlined, SettingOutlined, ThunderboltOutlined, UnorderedListOutlined,
+  AppstoreOutlined, CalendarOutlined, CustomerServiceOutlined, FireOutlined, TableOutlined, FlagOutlined, PlaySquareOutlined, SettingOutlined, ThunderboltOutlined, UnorderedListOutlined,
 } from '@ant-design/icons';
 import Reels from './pages/Reels.jsx';
 import Schedule from './pages/Schedule.jsx';
@@ -9,6 +9,7 @@ import Queue from './pages/Queue.jsx';
 import Calendar from './pages/Calendar.jsx';
 import Pages from './pages/Pages.jsx';
 import Videos from './pages/Videos.jsx';
+import PageVideoMatrix from './pages/PageVideoMatrix.jsx';
 import Music from './pages/Music.jsx';
 import Hooks from './pages/Hooks.jsx';
 import Settings from './pages/Settings.jsx';
@@ -19,6 +20,7 @@ const MENU = [
   { key: 'calendar', icon: <TableOutlined />, label: 'Lịch tổng quan', Component: Calendar },
   { key: 'queue', icon: <UnorderedListOutlined />, label: 'Hàng đợi', Component: Queue },
   { key: 'videos', icon: <PlaySquareOutlined />, label: 'Kho video', Component: Videos },
+  { key: 'matrix', icon: <AppstoreOutlined />, label: 'Page × video', Component: PageVideoMatrix },
   { key: 'music', icon: <CustomerServiceOutlined />, label: 'Kho nhạc', Component: Music },
   { key: 'hooks', icon: <ThunderboltOutlined />, label: 'Kho hook', Component: Hooks },
   { key: 'pages', icon: <FlagOutlined />, label: 'Pages', Component: Pages },

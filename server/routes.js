@@ -747,7 +747,7 @@ export function registerRoutes(app) {
     await videoFolderMap();
     const videos = videoFolders.files
       .filter((f) => !folder || f.folder === folder || f.folder.startsWith(`${folder}/`))
-      .map((f) => ({ id: f.id, name: f.name, folder: f.folder }));
+      .map(({ id, name, folder: path, size, durationMs, width, height }) => ({ id, name, folder: path, size, durationMs, width, height }));
     const pages = (group === NO_GROUP
       ? db.prepare('SELECT id, name FROM pages WHERE group_name IS NULL ORDER BY name').all()
       : group
