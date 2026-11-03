@@ -8,6 +8,20 @@ const ALLOWED = ['image/jpeg', 'image/png'];
 const MAX_BYTES = 4 * 1024 * 1024;
 const PREVIEW_COUNT = 24;
 
+// What differs between changing avatars and cover photos.
+export const IMAGE_KINDS = {
+  avatar: {
+    label: 'avatar',
+    preview: { width: 56, height: 56, borderRadius: '50%' },
+    hint: 'Ảnh vuông, tối thiểu 180×180 px, JPG hoặc PNG. Token của BM cần có quyền pages_manage_metadata.',
+  },
+  cover: {
+    label: 'ảnh bìa',
+    preview: { width: 120, height: 46, borderRadius: 4 },
+    hint: 'Ảnh ngang, nên 1640×624 px (tối thiểu 400×150), JPG hoặc PNG. Ảnh được đặt làm bìa mà không đăng bài lên page. Token của BM cần có quyền pages_manage_posts và pages_manage_metadata.',
+  },
+};
+
 function shuffle(arr) {
   const a = [...arr];
   for (let i = a.length - 1; i > 0; i--) {
@@ -33,7 +47,8 @@ async function uploadImage(file) {
   return data.id;
 }
 
-export default function AvatarBulkModal({ pages, onClose, onStarted }) {
+export default function AvatarBulkModal({ kind = 'avatar', pages, onClose, onStarted }) {
+  const { label, preview, hint } = IMAGE_KINDS[kind];
   const { message } = App.useApp();
   const folderInput = useRef(null);
   const filesInput = useRef(null);
@@ -68,6 +83,7 @@ export default function AvatarBulkModal({ pages, onClose, onStarted }) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          kind,
           delayMinSec: Math.min(delayMin, delayMax),
           delayMaxSec: Math.max(delayMin, delayMax),
           items: plan.map(({ page, file }) => ({ pageId: page.id, imageId: ids.get(file), fileName: file.name })),
@@ -92,7 +108,7 @@ export default function AvatarBulkModal({ pages, onClose, onStarted }) {
     <Modal
       open
       width={720}
-      title={<Space><PictureOutlined />Đổi avatar cho {pages.length} page</Space>}
+      title={<Space><PictureOutlined />Đổi {label} cho {pages.length} page</Space>}
       onCancel={upload ? undefined : onClose}
       maskClosable={!upload}
       footer={(
@@ -127,9 +143,9 @@ export default function AvatarBulkModal({ pages, onClose, onStarted }) {
                     key={p.url}
                     src={p.url}
                     alt={p.name}
-                    width={56}
-                    height={56}
-                    style={{ objectFit: 'cover', borderRadius: '50%' }}
+                    width={preview.width}
+                    height={preview.height}
+                    style={{ objectFit: 'cover', borderRadius: preview.borderRadius }}
                   />
                 ))}
                 {files.length > PREVIEW_COUNT && (
@@ -146,7 +162,7 @@ export default function AvatarBulkModal({ pages, onClose, onStarted }) {
             type="warning"
             showIcon
             message={`Chỉ có ${files.length} ảnh cho ${pages.length} page — một số ảnh sẽ được dùng cho nhiều page.`}
-            description="Nhiều page dùng chung avatar dễ bị coi là cùng một chủ / page giả mạo. Nên thêm ảnh để mỗi page một ảnh riêng."
+            description={`Nhiều page dùng chung ${label} dễ bị coi là cùng một chủ / page giả mạo. Nên thêm ảnh để mỗi page một ảnh riêng.`}
           />
         )}
 
@@ -164,8 +180,7 @@ export default function AvatarBulkModal({ pages, onClose, onStarted }) {
         </Space>
 
         <Typography.Text type="secondary" style={{ fontSize: 13 }}>
-          Ảnh vuông, tối thiểu 180×180 px, JPG hoặc PNG. Token của BM cần có quyền <code>pages_manage_metadata</code>.
-          Nên bấm "Thử trước 1 page" để kiểm tra trước khi đổi cả loạt.
+          {hint} Nên bấm "Thử trước 1 page" để kiểm tra trước khi đổi cả loạt.
         </Typography.Text>
 
         {upload && (

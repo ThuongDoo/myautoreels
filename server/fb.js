@@ -86,23 +86,35 @@ export function assignPageToUser(pageId, userId, token) {
   }, token);
 }
 
-// --- Page profile picture ---
+// --- Page profile picture and cover photo ---
 
 const IMAGE_MIME = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png' };
 
-// Uploads the image straight to /{page}/picture. Some Pages reject that, so on a non-permission,
-// non-rate-limit error we fall back to an unpublished photo and set that as the picture.
-export async function setPagePicture(pageId, token, filePath) {
+// Multipart body with the image file as `source`.
+function imageForm(filePath, token) {
   const bytes = fs.readFileSync(filePath);
   const name = filePath.split(/[\\/]/).pop();
   const type = IMAGE_MIME[name.slice(name.lastIndexOf('.')).toLowerCase()] || 'image/jpeg';
-  const form = (extra = {}) => {
+  return (extra = {}) => {
     const f = new FormData();
     f.append('access_token', token);
     for (const [k, v] of Object.entries(extra)) f.append(k, v);
     f.append('source', new Blob([bytes], { type }), name);
     return f;
   };
+}
+
+// The cover is an unpublished photo of the page set as its `cover`, without a post on the page's feed.
+export async function setPageCover(pageId, token, filePath) {
+  const form = imageForm(filePath, token);
+  const photo = await request(new URL(`${graphBase()}/${pageId}/photos`), { method: 'POST', body: form({ published: 'false' }) });
+  return graph('POST', `/${pageId}`, { cover: photo.id, no_feed_story: true, no_notification: true }, token);
+}
+
+// Uploads the image straight to /{page}/picture. Some Pages reject that, so on a non-permission,
+// non-rate-limit error we fall back to an unpublished photo and set that as the picture.
+export async function setPagePicture(pageId, token, filePath) {
+  const form = imageForm(filePath, token);
   try {
     return await request(new URL(`${graphBase()}/${pageId}/picture`), { method: 'POST', body: form() });
   } catch (e) {

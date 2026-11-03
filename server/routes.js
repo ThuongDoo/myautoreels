@@ -324,8 +324,9 @@ export function registerRoutes(app) {
 
   app.get('/api/pages/assign-all/status', async () => assignTask || { running: false, idle: true });
 
-  // --- Bulk avatar change ---
+  // --- Bulk avatar / cover photo change ---
   // The browser uploads each image once (raw body), then starts a task with page -> image pairs.
+  // One run at a time for both kinds.
   const AVATAR_DIR = path.join(DATA_DIR, 'avatars');
   const AVATAR_TYPES = { 'image/jpeg': '.jpg', 'image/png': '.png' };
   fs.mkdirSync(AVATAR_DIR, { recursive: true });
@@ -349,16 +350,22 @@ export function registerRoutes(app) {
 
   let avatarTask = null;
 
-  function startAvatarChange(items, minSec, maxSec) {
-    const task = createTask({ todo: items.length, changed: 0, test: items.length === 1 });
+  const IMAGE_KINDS = {
+    avatar: { label: 'avatar', set: fb.setPagePicture },
+    cover: { label: 'ảnh bìa', set: fb.setPageCover },
+  };
+
+  function startAvatarChange(items, minSec, maxSec, kind) {
+    const { label, set } = IMAGE_KINDS[kind];
+    const task = createTask({ todo: items.length, changed: 0, test: items.length === 1, kind });
     return runTask(task, async ({ log, sleep, retryOnBlock, failItem }) => {
-      log(`Đổi avatar cho ${items.length} page, mỗi page cách nhau ngẫu nhiên ${minSec}–${maxSec} giây`);
-      task.phase = 'Đang đổi avatar';
+      log(`Đổi ${label} cho ${items.length} page, mỗi page cách nhau ngẫu nhiên ${minSec}–${maxSec} giây`);
+      task.phase = `Đang đổi ${label}`;
       try {
         for (const { page, image, fileName } of items) {
           task.current = page.name;
           try {
-            await retryOnBlock(page.name, () => fb.setPagePicture(page.id, page.access_token, path.join(AVATAR_DIR, image)));
+            await retryOnBlock(page.name, () => set(page.id, page.access_token, path.join(AVATAR_DIR, image)));
             task.changed++;
             log(`✓ ${page.name} ← ${fileName}`, 'success');
           } catch (e) {
@@ -377,19 +384,23 @@ export function registerRoutes(app) {
         }
         task.current = null;
 
-        task.phase = 'Cập nhật avatar trong app';
-        const accountIds = [...new Set(items.map((i) => i.page.account_id).filter(Boolean))];
-        for (const id of accountIds) await syncAccount(getAccount(id));
+        // The app shows avatars, not covers.
+        if (kind === 'avatar') {
+          task.phase = 'Cập nhật avatar trong app';
+          const accountIds = [...new Set(items.map((i) => i.page.account_id).filter(Boolean))];
+          for (const id of accountIds) await syncAccount(getAccount(id));
+        }
         log(`Hoàn tất: đổi được ${task.changed}/${items.length} page`, 'success');
       } finally {
         for (const image of new Set(items.map((i) => i.image))) fs.rmSync(path.join(AVATAR_DIR, image), { force: true });
       }
-    }, { canceledText: 'Đã dừng theo yêu cầu. Các page chưa đổi vẫn giữ avatar cũ.' });
+    }, { canceledText: `Đã dừng theo yêu cầu. Các page chưa đổi vẫn giữ ${label} cũ.` });
   }
 
   app.post('/api/avatars/run', async (req) => {
-    if (avatarTask?.running) throw bad('Đang có một lượt đổi avatar chạy, chờ xong hoặc bấm Dừng');
-    const { items = [], delayMinSec = 10, delayMaxSec = 30 } = req.body || {};
+    if (avatarTask?.running) throw bad(`Đang có một lượt đổi ${IMAGE_KINDS[avatarTask.kind].label} chạy, chờ xong hoặc bấm Dừng`);
+    const { items = [], delayMinSec = 10, delayMaxSec = 30, kind = 'avatar' } = req.body || {};
+    if (!IMAGE_KINDS[kind]) throw bad('Loại ảnh không hợp lệ');
     if (!items.length) throw bad('Chưa chọn page');
     const resolved = items.map(({ pageId, imageId, fileName }) => {
       const page = db.prepare('SELECT * FROM pages WHERE id = ?').get(pageId);
@@ -401,7 +412,7 @@ export function registerRoutes(app) {
     });
     const lo = Math.max(3, Number(delayMinSec) || 10);
     const hi = Math.max(lo, Number(delayMaxSec) || lo);
-    avatarTask = startAvatarChange(resolved, lo, hi);
+    avatarTask = startAvatarChange(resolved, lo, hi, kind);
     return avatarTask;
   });
 

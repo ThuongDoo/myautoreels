@@ -6,7 +6,7 @@ import {
   DownOutlined, ExportOutlined, PictureOutlined, SettingOutlined, SyncOutlined,
 } from '@ant-design/icons';
 import { api, groupColor, useApi } from '../api.js';
-import AvatarBulkModal from './AvatarBulk.jsx';
+import AvatarBulkModal, { IMAGE_KINDS } from './AvatarBulk.jsx';
 import TaskProgressModal, { LOG_COLORS } from './TaskProgress.jsx';
 import { GroupManagerModal, NewGroupInput } from './GroupControls.jsx';
 
@@ -19,7 +19,7 @@ export default function Pages() {
   const { data: accounts = [] } = useApi('/accounts');
   const [accountFilter, setAccountFilter] = useState();
   const [showAssign, setShowAssign] = useState(false);
-  const [showAvatarPicker, setShowAvatarPicker] = useState(false);
+  const [imagePicker, setImagePicker] = useState(null); // 'avatar' | 'cover'
   const [showAvatarProgress, setShowAvatarProgress] = useState(false);
   const [selected, setSelected] = useState([]);
   const [q, setQ] = useState('');
@@ -178,7 +178,8 @@ export default function Pages() {
               )}
             />
             <Button onClick={() => update(selected, { group_name: null }, `Đã bỏ ${selected.length} page khỏi nhóm`)}>Bỏ khỏi nhóm</Button>
-            <Button icon={<PictureOutlined />} onClick={() => setShowAvatarPicker(true)}>Đổi avatar</Button>
+            <Button icon={<PictureOutlined />} onClick={() => setImagePicker('avatar')}>Đổi avatar</Button>
+            <Button icon={<PictureOutlined />} onClick={() => setImagePicker('cover')}>Đổi ảnh bìa</Button>
             <Button onClick={() => update(selected, { enabled: true })}>Bật</Button>
             <Button onClick={() => update(selected, { enabled: false })}>Tắt</Button>
             <Button type="link" onClick={() => setSelected([])}>Bỏ chọn</Button>
@@ -256,19 +257,20 @@ export default function Pages() {
           onClose={() => { setShowAssign(false); reload({ silent: true }); }}
         />
       )}
-      {showAvatarPicker && (
+      {imagePicker && (
         <AvatarBulkModal
+          kind={imagePicker}
           pages={data.filter((p) => selected.includes(p.id))}
-          onClose={() => setShowAvatarPicker(false)}
-          onStarted={() => { setShowAvatarPicker(false); setShowAvatarProgress(true); }}
+          onClose={() => setImagePicker(null)}
+          onStarted={() => { setImagePicker(null); setShowAvatarProgress(true); }}
         />
       )}
       {showAvatarProgress && (
         <TaskProgressModal
           statusUrl="/avatars/status"
           cancelUrl="/avatars/cancel"
-          title={(t) => (t.test ? 'Đổi avatar — thử 1 page' : 'Đổi avatar hàng loạt')}
-          stopDescription="Các page chưa đổi sẽ giữ avatar cũ."
+          title={(t) => `Đổi ${IMAGE_KINDS[t.kind || 'avatar'].label} ${t.test ? '— thử 1 page' : 'hàng loạt'}`}
+          stopDescription="Các page chưa đổi sẽ giữ ảnh cũ."
           stats={(t) => [
             { label: 'Tổng', value: `${t.todo} page` },
             { label: 'Đã đổi', value: t.changed, color: LOG_COLORS.success },
