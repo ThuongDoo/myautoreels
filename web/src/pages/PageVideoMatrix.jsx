@@ -5,6 +5,7 @@ import {
   Button, Card, Empty, Segmented, Select, Space, Switch, Table, Tag, Tooltip, Typography,
 } from 'antd';
 import { CalendarOutlined, FolderOutlined } from '@ant-design/icons';
+import dayjs from 'dayjs';
 import { fmtNum, groupColor, useApi } from '../api.js';
 import { openScheduleWith } from '../prefill.js';
 import VideoDrawer from './VideoDrawer.jsx';
@@ -79,7 +80,8 @@ const Cell = memo(({ c, page, video, tint, sel }) => {
   const key = `${page.id}|${video.id}`;
   const on = useSyncExternalStore((fn) => sel.subscribeCell(key, fn), () => sel.has(key));
   const tip = `${page.name} · ${video.name}\n${c
-    ? `${c.done} lần đã đăng${c.upcoming ? `, ${c.upcoming} lần sắp đăng` : ''} · ${fmtNum(c.views)} views`
+    ? `${c.done} lần đã đăng${c.upcoming ? `, ${c.upcoming} lần sắp đăng` : ''} · ${fmtNum(c.views)} views${
+      c.last_at ? `\nĐăng gần nhất: ${dayjs(c.last_at).format('HH:mm DD/MM/YYYY')} (${dayjs(c.last_at).fromNow()})` : ''}`
     : 'Chưa đăng'}\n${on ? 'Đang chọn · bấm để bỏ chọn' : 'Bấm để chọn'}`;
   return (
     <div
@@ -97,6 +99,7 @@ const Cell = memo(({ c, page, video, tint, sel }) => {
             {c.upcoming > 0 && <span style={BADGE.upcoming}>+{c.upcoming}</span>}
           </span>
           {c.done > 0 && <span style={{ fontSize: 11, lineHeight: 1.3, color: 'rgba(0,0,0,0.45)' }}>{compact(c.views)} view</span>}
+          {c.last_at && <span style={{ fontSize: 10, lineHeight: 1.3, color: 'rgba(0,0,0,0.45)' }}>{dayjs(c.last_at).format('HH:mm DD/MM')}</span>}
         </>
       ) : <span style={{ color: 'rgba(0,0,0,0.25)' }}>·</span>}
     </div>
@@ -260,14 +263,20 @@ export default function PageVideoMatrix() {
         ...f.videos.map((v) => ({
           key: v.id,
           title: (
-            <Tooltip title={`${folderLabel(f.name)} / ${v.name}`}>
-              <a
-                onClick={() => setOpenVideo({ id: v.id, name: v.name })}
-                style={{ display: 'block', maxWidth: VIDEO_COL - 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-              >
-                {v.name.replace(/\.[^.]+$/, '')}
-              </a>
-            </Tooltip>
+            <>
+              <Tooltip title={`${folderLabel(f.name)} / ${v.name}`}>
+                <a
+                  onClick={() => setOpenVideo({ id: v.id, name: v.name })}
+                  style={{ display: 'block', maxWidth: VIDEO_COL - 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                >
+                  {v.name.replace(/\.[^.]+$/, '')}
+                </a>
+              </Tooltip>
+              {/* Times this video was posted, over the pages shown. */}
+              <div style={{ fontSize: 11, fontWeight: 400, color: videoTotals[v.id] ? '#389e0d' : 'rgba(0,0,0,0.35)' }}>
+                {videoTotals[v.id] ? `${videoTotals[v.id]} lần đăng` : 'chưa đăng'}
+              </div>
+            </>
           ),
           width: VIDEO_COL,
           align: 'center',
@@ -277,7 +286,7 @@ export default function PageVideoMatrix() {
         })),
       ],
     })),
-  ], [folderCols, sel]); // eslint-disable-line react-hooks/exhaustive-deps
+  ], [folderCols, videoTotals, sel]); // eslint-disable-line react-hooks/exhaustive-deps
   const videoCount = folderCols.reduce((s, f) => s + f.videos.length, 0);
 
   return (

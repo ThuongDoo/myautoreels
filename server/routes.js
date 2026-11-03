@@ -758,7 +758,8 @@ export function registerRoutes(app) {
     const rows = db.prepare(`
       SELECT j.drive_file_id AS id, j.drive_file_name AS name, j.page_id AS page,
              SUM(j.status = 'done') AS done, SUM(j.status IN ${ACTIVE}) AS upcoming,
-             COALESCE(SUM(r.views), 0) AS views
+             COALESCE(SUM(r.views), 0) AS views,
+             MAX(CASE WHEN j.status = 'done' THEN COALESCE(r.published_at, j.published_at) END) AS last_at
       FROM jobs j LEFT JOIN reels r ON r.job_id = j.id
       WHERE (j.drive_file_id IN (${vMarks}) OR j.drive_file_name IN (${vMarks}))
         AND j.page_id IN (${pages.map(() => '?').join(',')})
@@ -771,10 +772,11 @@ export function registerRoutes(app) {
       const file = match(r.id, r.name);
       if (!file) continue;
       const key = `${file.id}|${r.page}`;
-      const c = cells.get(key) || { video: file.id, page: r.page, done: 0, upcoming: 0, views: 0 };
+      const c = cells.get(key) || { video: file.id, page: r.page, done: 0, upcoming: 0, views: 0, last_at: null };
       c.done += r.done;
       c.upcoming += r.upcoming;
       c.views += r.views;
+      if (r.last_at && r.last_at > (c.last_at || 0)) c.last_at = r.last_at;
       cells.set(key, c);
     }
     return { videos, pages, cells: [...cells.values()].filter((c) => c.done || c.upcoming) };
