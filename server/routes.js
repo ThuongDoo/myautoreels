@@ -469,21 +469,23 @@ export function registerRoutes(app) {
 
   // How many videos in each folder (subfolders included) were already posted, for the picker.
   // Drive listings are cached briefly; posted/upcoming counts always come fresh from the DB.
-  const folderCache = new Map(); // folderId -> { at, ids }
+  const folderCache = new Map(); // folderId -> { at, files: [{ id, name }] }
   const FOLDER_CACHE_MS = 5 * 60_000;
   app.get('/api/drive/folder-usage', async (req) => {
     const ids = String(req.query.ids || '').split(',').filter(Boolean).slice(0, 200);
     const fileIds = async (id) => {
       const hit = folderCache.get(id);
-      if (hit && Date.now() - hit.at < FOLDER_CACHE_MS) return hit.ids;
-      const list = (await listVideosRecursive(id)).map((v) => v.id);
-      folderCache.set(id, { at: Date.now(), ids: list });
+      if (hit && Date.now() - hit.at < FOLDER_CACHE_MS) return hit.files;
+      const list = (await listVideosRecursive(id)).map(({ id: fid, name }) => ({ id: fid, name }));
+      folderCache.set(id, { at: Date.now(), files: list });
       return list;
     };
-    const usage = db.prepare(`
+    // By name too: a video uploaded again gets a new Drive id but keeps its history.
+    const usageStmt = db.prepare(`
       SELECT SUM(status = 'done') > 0 AS posted, SUM(status IN ${ACTIVE}) > 0 AS upcoming
-      FROM jobs WHERE drive_file_id = ?
+      FROM jobs WHERE drive_file_id = ? OR drive_file_name = ?
     `);
+    const usage = { get: (f) => usageStmt.get(f.id, f.name) };
     const out = {};
     let next = 0;
     await Promise.all(Array.from({ length: Math.min(4, ids.length) }, async () => {
@@ -643,31 +645,47 @@ export function registerRoutes(app) {
   const ACTIVE = `('pending', 'uploading', 'uploaded', 'publishing', 'processing')`;
 
   // Adds { posted, upcoming } to each Drive video so the picker can warn about reuse.
+  // Matched by Drive id or by file name (see sameVideo).
   function withUsage(videos) {
     if (!videos.length) return videos;
+    const marks = videos.map(() => '?').join(',');
     const rows = db.prepare(`
-      SELECT drive_file_id AS id, SUM(status = 'done') AS posted, SUM(status IN ${ACTIVE}) AS upcoming
-      FROM jobs WHERE drive_file_id IN (${videos.map(() => '?').join(',')}) GROUP BY drive_file_id
-    `).all(...videos.map((v) => v.id));
-    const usage = new Map(rows.map((r) => [r.id, r]));
-    return videos.map((v) => ({ ...v, posted: usage.get(v.id)?.posted || 0, upcoming: usage.get(v.id)?.upcoming || 0 }));
+      SELECT drive_file_id AS id, drive_file_name AS name, SUM(status = 'done') AS posted, SUM(status IN ${ACTIVE}) AS upcoming
+      FROM jobs WHERE drive_file_id IN (${marks}) OR drive_file_name IN (${marks})
+      GROUP BY drive_file_id, drive_file_name
+    `).all(...videos.map((v) => v.id), ...videos.map((v) => v.name));
+    return videos.map((v) => {
+      const mine = rows.filter((r) => sameVideo(r, v));
+      return { ...v, posted: mine.reduce((s, r) => s + r.posted, 0), upcoming: mine.reduce((s, r) => s + r.upcoming, 0) };
+    });
   }
 
-  // Drive file id -> folder path under the default video folder ('' = the folder itself),
-  // so the libraries can show where each video came from. Cached; empty if Drive fails.
-  // Rescanned every 10 minutes, or after a minute when a requested video isn't in it yet
+  // Uploading a file to Drive again gives it a new id while jobs keep the old one, so a job's
+  // video is the Drive file with the same id, or else the one with the same file name.
+  const sameVideo = (job, file) => job.id === file.id || (!!job.name && job.name === file.name);
+  function driveMatcher(files) {
+    const byId = new Map(files.map((f) => [f.id, f]));
+    const byName = new Map();
+    for (const f of files) if (!byName.has(f.name)) byName.set(f.name, f);
+    return (id, name) => byId.get(id) || (name ? byName.get(name) : undefined) || null;
+  }
+
+  // The default video folder's videos (subfolders included), each with its folder path
+  // ('' = the folder itself), so the libraries can show where a video came from. Cached;
+  // rescanned every 10 minutes, or after a minute when a requested video isn't in it
   // (scheduled after the last scan, or the scan came back incomplete).
-  let videoFolders = { at: 0, root: null, map: new Map(), files: [] };
+  let videoFolders = { at: 0, root: null, files: [], match: driveMatcher([]) };
   let videoFoldersScan = null;
-  async function videoFolderMap(ids = []) {
+  // `wanted`: [{ id, name }] the caller needs; returns match(id, name) -> Drive file | null.
+  async function videoFolderMap(wanted = []) {
     const root = getSetting('drive_folder_id');
-    if (!root) return new Map();
+    if (!root) return driveMatcher([]);
     const age = Date.now() - videoFolders.at;
-    const missing = ids.some((id) => id && !videoFolders.map.has(id));
+    const missing = wanted.some((w) => w.id && !videoFolders.match(w.id, w.name));
     if (videoFolders.root !== root || age > 10 * 60_000 || (missing && age > 60_000)) {
       videoFoldersScan ??= listVideosRecursive(root)
         .then((list) => {
-          videoFolders = { at: Date.now(), root, map: new Map(list.map((v) => [v.id, v.folder])), files: list };
+          videoFolders = { at: Date.now(), root, files: list, match: driveMatcher(list) };
         })
         .catch((e) => {
           app.log.warn(`video folders: ${e.message}`);
@@ -676,21 +694,92 @@ export function registerRoutes(app) {
         .finally(() => { videoFoldersScan = null; });
       await videoFoldersScan;
     }
-    return videoFolders.map;
+    return videoFolders.match;
   }
-  const folderOf = (map, id) => (map.has(id) ? map.get(id) || '(thư mục gốc)' : null);
+  const folderName = (file) => (file ? file.folder || '(thư mục gốc)' : null);
 
+  const SUMMED = ['posted', 'upcoming', 'failed', 'views', 'interactions', 'viral'];
   app.get('/api/videos', async () => {
     const rows = videoRows.all();
-    const folders = await videoFolderMap(rows.map((v) => v.id));
-    // Every video in the Drive folder is listed, including ones never scheduled yet.
-    const seen = new Set(rows.map((v) => v.id));
-    const unused = videoFolders.files.filter((f) => !seen.has(f.id)).map((f) => ({
-      id: f.id, name: f.name, posted: 0, upcoming: 0, failed: 0, pages: 0, first_posted: null, last_posted: null,
-      views: 0, interactions: 0, best_views: 0, viral: 0,
+    const match = await videoFolderMap(rows);
+    // Rows of the same Drive file (old and new id after a re-upload) are merged into one,
+    // and every video in the Drive folder is listed, including ones never scheduled yet.
+    const byFile = new Map();
+    const lost = [];
+    for (const v of rows) {
+      const file = match(v.id, v.name);
+      if (!file) { lost.push({ ...v, folder: null }); continue; }
+      const cur = byFile.get(file.id);
+      if (!cur) { byFile.set(file.id, { ...v, id: file.id, name: file.name, folder: folderName(file) }); continue; }
+      for (const k of SUMMED) cur[k] += v[k];
+      cur.pages = Math.max(cur.pages, v.pages);
+      cur.best_views = Math.max(cur.best_views, v.best_views);
+      cur.first_posted = Math.min(cur.first_posted ?? Infinity, v.first_posted ?? Infinity);
+      if (cur.first_posted === Infinity) cur.first_posted = null;
+      cur.last_posted = Math.max(cur.last_posted || 0, v.last_posted || 0) || null;
+    }
+    const unused = videoFolders.files.filter((f) => !byFile.has(f.id)).map((f) => ({
+      id: f.id, name: f.name, folder: folderName(f), posted: 0, upcoming: 0, failed: 0, pages: 0,
+      first_posted: null, last_posted: null, views: 0, interactions: 0, best_views: 0, viral: 0,
     }));
-    return [...rows, ...unused].map((v) => ({ ...v, folder: folderOf(folders, v.id) }));
+    return [...byFile.values(), ...unused, ...lost];
   });
+
+  // Folder paths under the default video folder with how many videos each holds (subfolders included).
+  app.get('/api/video-folders', async () => {
+    await videoFolderMap();
+    const count = new Map();
+    for (const f of videoFolders.files) {
+      const parts = f.folder ? f.folder.split('/') : [];
+      for (let i = 0; i <= parts.length; i++) {
+        const p = parts.slice(0, i).join('/');
+        count.set(p, (count.get(p) || 0) + 1);
+      }
+    }
+    return [...count].map(([path, videos]) => ({ path, videos })).sort((a, b) => a.path.localeCompare(b.path, 'vi'));
+  });
+
+  // Which pages of a group posted which videos of a folder: posts per video × page.
+  // folder '' = the whole default folder; group '' = all pages, NO_GROUP = pages without a group.
+  app.get('/api/videos/page-matrix', async (req) => {
+    const folder = String(req.query.folder || '');
+    const group = req.query.group || '';
+    await videoFolderMap();
+    const videos = videoFolders.files
+      .filter((f) => !folder || f.folder === folder || f.folder.startsWith(`${folder}/`))
+      .map((f) => ({ id: f.id, name: f.name, folder: f.folder }));
+    const pages = (group === NO_GROUP
+      ? db.prepare('SELECT id, name FROM pages WHERE group_name IS NULL ORDER BY name').all()
+      : group
+        ? db.prepare('SELECT id, name FROM pages WHERE group_name = ? ORDER BY name').all(group)
+        : db.prepare('SELECT id, name FROM pages ORDER BY name').all());
+    if (!videos.length || !pages.length) return { videos, pages, cells: [] };
+    const vMarks = videos.map(() => '?').join(',');
+    const rows = db.prepare(`
+      SELECT j.drive_file_id AS id, j.drive_file_name AS name, j.page_id AS page,
+             SUM(j.status = 'done') AS done, SUM(j.status IN ${ACTIVE}) AS upcoming,
+             COALESCE(SUM(r.views), 0) AS views
+      FROM jobs j LEFT JOIN reels r ON r.job_id = j.id
+      WHERE (j.drive_file_id IN (${vMarks}) OR j.drive_file_name IN (${vMarks}))
+        AND j.page_id IN (${pages.map(() => '?').join(',')})
+      GROUP BY j.drive_file_id, j.drive_file_name, j.page_id
+    `).all(...videos.map((v) => v.id), ...videos.map((v) => v.name), ...pages.map((p) => p.id));
+    // Fold old-id rows into the Drive file they belong to.
+    const match = driveMatcher(videos);
+    const cells = new Map();
+    for (const r of rows) {
+      const file = match(r.id, r.name);
+      if (!file) continue;
+      const key = `${file.id}|${r.page}`;
+      const c = cells.get(key) || { video: file.id, page: r.page, done: 0, upcoming: 0, views: 0 };
+      c.done += r.done;
+      c.upcoming += r.upcoming;
+      c.views += r.views;
+      cells.set(key, c);
+    }
+    return { videos, pages, cells: [...cells.values()].filter((c) => c.done || c.upcoming) };
+  });
+
   const videoRows = db.prepare(`
     SELECT j.drive_file_id AS id, MAX(j.drive_file_name) AS name,
            SUM(j.status = 'done') AS posted,
@@ -709,6 +798,7 @@ export function registerRoutes(app) {
     ORDER BY views DESC, last_posted DESC
   `);
 
+  // `name` (optional) also brings in posts made under the file's old Drive id (see sameVideo).
   app.get('/api/videos/:fileId/posts', async (req) => db.prepare(`
     SELECT j.id AS job_id, j.page_id, p.name AS page_name, p.group_name, j.status, j.scheduled_at, j.published_at,
            j.video_id, j.error, j.caption,
@@ -716,9 +806,9 @@ export function registerRoutes(app) {
     FROM jobs j
     LEFT JOIN pages p ON p.id = j.page_id
     LEFT JOIN reels r ON r.job_id = j.id
-    WHERE j.drive_file_id = ? AND j.status != 'canceled'
+    WHERE (j.drive_file_id = ? OR j.drive_file_name = ?) AND j.status != 'canceled'
     ORDER BY COALESCE(j.published_at, j.scheduled_at) DESC
-  `).all(req.params.fileId));
+  `).all(req.params.fileId, req.query.name || '\u0000'));
 
   // --- Jobs ---
   app.get('/api/jobs', async (req) => {
@@ -931,8 +1021,8 @@ export function registerRoutes(app) {
       LEFT JOIN jobs j ON j.id = r.job_id
       WHERE ${where.join(' AND ')} ORDER BY r.views DESC LIMIT 3000
     `).all(...args);
-    const folders = await videoFolderMap(rows.map((r) => r.drive_file_id));
-    return rows.map((r) => ({ ...r, video_folder: r.drive_file_id ? folderOf(folders, r.drive_file_id) : null }));
+    const match = await videoFolderMap(rows.map((r) => ({ id: r.drive_file_id, name: r.drive_file_name })));
+    return rows.map((r) => ({ ...r, video_folder: r.drive_file_id ? folderName(match(r.drive_file_id, r.drive_file_name)) : null }));
   });
 
   // Views (`gain`) and likes / comments / shares gained per hour (UTC hour buckets; the browser groups them into local days).

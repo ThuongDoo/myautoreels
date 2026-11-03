@@ -12,7 +12,7 @@ export const driveViewUrl = (id) => `https://drive.google.com/file/d/${id}/view`
 
 // Every post of one Drive video: which pages, when, and how each reel performed.
 export default function VideoDrawer({ video, onClose }) {
-  const { data: posts = [], loading } = useApi(`/videos/${video.id}/posts`);
+  const { data: posts = [], loading } = useApi(`/videos/${video.id}/posts${video.name ? `?name=${encodeURIComponent(video.name)}` : ''}`);
   const done = posts.filter((p) => p.status === 'done');
   const views = done.reduce((s, p) => s + (p.views || 0), 0);
   const [previewError, setPreviewError] = useState(false);

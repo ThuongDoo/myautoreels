@@ -9,10 +9,13 @@ import {
   Tooltip,
   Typography,
 } from "antd";
-import { FireOutlined, FolderOutlined } from "@ant-design/icons";
+import {
+  FireOutlined, FolderOutlined, TableOutlined, UnorderedListOutlined,
+} from "@ant-design/icons";
 import dayjs from "dayjs";
 import { fmtNum, useApi } from "../api.js";
 import VideoDrawer from "./VideoDrawer.jsx";
+import PageVideoMatrix from "./PageVideoMatrix.jsx";
 
 // Scheduled videos the server couldn't find under the default Drive folder (moved, deleted,
 // or scheduled from another folder).
@@ -49,6 +52,7 @@ export default function Videos() {
   const [folderFilter, setFolderFilter] = useState("");
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(null);
+  const [view, setView] = useState("library");
 
   // One row per Drive folder the videos came from, summed from the video rows.
   const folderStats = useMemo(() => {
@@ -80,8 +84,30 @@ export default function Videos() {
       (!needle || (v.name || "").toLowerCase().includes(needle)),
   );
 
+  const tabs = (
+    <Segmented
+      value={view}
+      onChange={setView}
+      options={[
+        { value: "library", label: "Kho video", icon: <UnorderedListOutlined /> },
+        { value: "matrix", label: "Page × video", icon: <TableOutlined /> },
+      ]}
+    />
+  );
+
+  if (view === "matrix") {
+    return (
+      <Space direction="vertical" size={16} style={{ width: "100%" }}>
+        {tabs}
+        <PageVideoMatrix onOpenVideo={setOpen} />
+        {open && <VideoDrawer video={open} onClose={() => setOpen(null)} />}
+      </Space>
+    );
+  }
+
   return (
     <Space direction="vertical" size={16} style={{ width: "100%" }}>
+      {tabs}
       <Card size="small" title="Thống kê theo thư mục">
         <Table
           rowKey="key"
