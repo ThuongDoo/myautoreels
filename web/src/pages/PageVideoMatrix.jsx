@@ -221,11 +221,23 @@ export default function PageVideoMatrix() {
       title: 'Page',
       dataIndex: 'name',
       fixed: 'left',
-      width: 200,
-      ellipsis: true,
+      width: 250,
       // Clicking the page name selects / unselects every visible video in its row.
       render: (n, p) => (
-        <a title={`${n} · bấm để chọn cả dòng`} onClick={() => sel.toggle(folderCols.flatMap((f) => f.videos.map((v) => [p, v])))}>{n}</a>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+          <a
+            title={`${n} · bấm để chọn cả dòng`}
+            onClick={() => sel.toggle(folderCols.flatMap((f) => f.videos.map((v) => [p, v])))}
+            style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}
+          >
+            {n}
+          </a>
+          {p.group_name && (
+            <Tag color={groupColor(p.group_name)} style={{ margin: 0, flexShrink: 0, maxWidth: 110, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {p.group_name}
+            </Tag>
+          )}
+        </div>
       ),
     },
     {
@@ -322,7 +334,7 @@ export default function PageVideoMatrix() {
           dataSource={rows}
           columns={columns}
           pagination={false}
-          scroll={{ x: 290 + folderCols.length * 70 + videoCount * VIDEO_COL, y: 620 }}
+          scroll={{ x: 340 + folderCols.length * 70 + videoCount * VIDEO_COL, y: 620 }}
           summary={() => (
             <Table.Summary fixed>
               <Table.Summary.Row>

@@ -749,10 +749,10 @@ export function registerRoutes(app) {
       .filter((f) => !folder || f.folder === folder || f.folder.startsWith(`${folder}/`))
       .map(({ id, name, folder: path, size, durationMs, width, height }) => ({ id, name, folder: path, size, durationMs, width, height }));
     const pages = (group === NO_GROUP
-      ? db.prepare('SELECT id, name FROM pages WHERE group_name IS NULL ORDER BY name').all()
+      ? db.prepare('SELECT id, name, group_name FROM pages WHERE group_name IS NULL ORDER BY name').all()
       : group
-        ? db.prepare('SELECT id, name FROM pages WHERE group_name = ? ORDER BY name').all(group)
-        : db.prepare('SELECT id, name FROM pages ORDER BY name').all());
+        ? db.prepare('SELECT id, name, group_name FROM pages WHERE group_name = ? ORDER BY name').all(group)
+        : db.prepare('SELECT id, name, group_name FROM pages ORDER BY name').all());
     if (!videos.length || !pages.length) return { videos, pages, cells: [] };
     const vMarks = videos.map(() => '?').join(',');
     const rows = db.prepare(`
