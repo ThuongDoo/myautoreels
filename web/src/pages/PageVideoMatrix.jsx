@@ -151,10 +151,14 @@ export default function PageVideoMatrix() {
   const query = new URLSearchParams({ folder, group }).toString();
   const { data, loading } = useApi(`/videos/page-matrix?${query}`);
 
-  const { rows, folderCols, videoTotals, folderTotals, grand } = useMemo(() => {
+  const { rows, folderCols, videoTotals, videoUpcoming, folderTotals, grand } = useMemo(() => {
     const cells = new Map((data?.cells || []).map((c) => [`${c.page}|${c.video}`, c]));
     const videoTotals = {};
-    for (const c of data?.cells || []) videoTotals[c.video] = (videoTotals[c.video] || 0) + c.done;
+    const videoUpcoming = {};
+    for (const c of data?.cells || []) {
+      videoTotals[c.video] = (videoTotals[c.video] || 0) + c.done;
+      videoUpcoming[c.video] = (videoUpcoming[c.video] || 0) + c.upcoming;
+    }
 
     // Folders in name order, each with its videos (only posted ones when the switch is on).
     const names = [...new Set((data?.videos || []).map((v) => v.folder))].sort((a, b) => a.localeCompare(b, 'vi'));
@@ -194,6 +198,7 @@ export default function PageVideoMatrix() {
       rows: list,
       folderCols,
       videoTotals,
+      videoUpcoming,
       folderTotals,
       grand: list.reduce((s, p) => s + p.done, 0),
     };
@@ -287,9 +292,15 @@ export default function PageVideoMatrix() {
                   {v.name.replace(/\.[^.]+$/, '')}
                 </a>
               </Tooltip>
-              {/* Times this video was posted, over the pages shown. */}
-              <div style={{ fontSize: 11, fontWeight: 400, color: videoTotals[v.id] ? '#389e0d' : 'rgba(0,0,0,0.35)' }}>
-                {videoTotals[v.id] ? `${videoTotals[v.id]} lần đăng` : 'chưa đăng'}
+              {/* Scheduled / posted times of this video, over the pages shown. */}
+              <div style={{ fontSize: 11, fontWeight: 400, lineHeight: 1.4 }} title="Số lần sắp đăng / đã đăng">
+                {videoUpcoming[v.id] || videoTotals[v.id] ? (
+                  <>
+                    <span style={{ color: videoUpcoming[v.id] ? '#0958d9' : 'rgba(0,0,0,0.35)' }}>{videoUpcoming[v.id] || 0} sắp</span>
+                    {' / '}
+                    <span style={{ color: videoTotals[v.id] ? '#389e0d' : 'rgba(0,0,0,0.35)' }}>{videoTotals[v.id] || 0} đã</span>
+                  </>
+                ) : <span style={{ color: 'rgba(0,0,0,0.35)' }}>chưa đăng</span>}
               </div>
             </>
           ),
@@ -301,7 +312,7 @@ export default function PageVideoMatrix() {
         })),
       ],
     })),
-  ], [folderCols, videoTotals, sel]); // eslint-disable-line react-hooks/exhaustive-deps
+  ], [folderCols, videoTotals, videoUpcoming, sel]); // eslint-disable-line react-hooks/exhaustive-deps
   const videoCount = folderCols.reduce((s, f) => s + f.videos.length, 0);
 
   return (
