@@ -38,12 +38,33 @@ export default function App() {
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
 
+  // Collapsed = icons only; remembered per browser.
+  const [collapsed, setCollapsed] = useState(() => {
+    try { return localStorage.getItem('sider_collapsed') === '1'; } catch { return false; }
+  });
+  const toggle = (value) => {
+    setCollapsed(value);
+    try { localStorage.setItem('sider_collapsed', value ? '1' : '0'); } catch { /* private mode */ }
+  };
+
   const { Component } = MENU.find((m) => m.key === key) || MENU[0];
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
-      <Layout.Sider theme="light" breakpoint="lg" collapsedWidth={0} width={210}>
-        <div style={{ padding: '18px 20px', fontWeight: 700, fontSize: 18 }}>🎬 AutoReels</div>
+      <Layout.Sider
+        theme="light"
+        width={210}
+        collapsedWidth={64}
+        collapsible
+        collapsed={collapsed}
+        onCollapse={toggle}
+        breakpoint="lg"
+        onBreakpoint={(small) => small && setCollapsed(true)}
+        style={{ position: 'sticky', top: 0, height: '100vh', overflow: 'auto' }}
+      >
+        <div style={{ padding: collapsed ? '18px 0' : '18px 20px', textAlign: collapsed ? 'center' : 'left', fontWeight: 700, fontSize: 18, whiteSpace: 'nowrap' }}>
+          {collapsed ? '🎬' : '🎬 AutoReels'}
+        </div>
         <Menu
           mode="inline"
           selectedKeys={[key]}
