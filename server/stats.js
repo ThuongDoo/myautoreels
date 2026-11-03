@@ -72,7 +72,11 @@ export async function refreshStats() {
   if (running) return false;
   running = true;
   try {
-    const since = Date.now() - Number(getSetting('stats_days')) * 86_400_000;
+    // stats_reset_at: reports were wiped up to this time; never pull older reels back in.
+    const since = Math.max(
+      Date.now() - Number(getSetting('stats_days')) * 86_400_000,
+      Number(getSetting('stats_reset_at') || 0),
+    );
     const pages = db.prepare('SELECT * FROM pages WHERE enabled = 1').all();
     console.log(`[stats] Bắt đầu cập nhật ${pages.length} page`);
     await pool(pages, PAGE_CONCURRENCY, async (page) => {

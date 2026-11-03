@@ -194,6 +194,7 @@ const DEFAULTS = {
   preupload_minutes: '10',
   stats_interval_minutes: '120',
   stats_days: '7',
+  stats_reset_at: '0',
   viral_multiplier: '3',
   viral_min_views: '1000',
 };
