@@ -1,4 +1,6 @@
-import { useMemo, useState } from 'react';
+import {
+  memo, useMemo, useState, useSyncExternalStore,
+} from 'react';
 import {
   Button, Card, Empty, Segmented, Select, Space, Switch, Table, Tag, Tooltip, Typography,
 } from 'antd';
@@ -18,57 +20,125 @@ const folderLabel = (f) => f || '(thư mục gốc)';
 const VIDEO_COL = 86;
 const byName = (a, b) => a.name.localeCompare(b.name, 'vi', { numeric: true });
 
-const compact = (v) => Intl.NumberFormat('vi-VN', { notation: 'compact' }).format(v);
+const compactFmt = Intl.NumberFormat('vi-VN', { notation: 'compact' });
+const compact = (v) => compactFmt.format(v);
+// Plain spans styled like antd's green / blue Tag: the table can hold thousands of cells.
+const badge = (color, bg, border) => ({
+  display: 'inline-block', padding: '0 6px', margin: '0 1px', fontSize: 12, lineHeight: '20px',
+  color, background: bg, border: `1px solid ${border}`, borderRadius: 4,
+});
+const BADGE = { done: badge('#389e0d', '#f6ffed', '#b7eb8f'), upcoming: badge('#0958d9', '#e6f4ff', '#91caff') };
+
+// Picked cells live outside React state so a click re-renders only the cells it changes,
+// not the whole table. "pageId|videoId" -> { page, video }.
+function createSelection() {
+  let items = new Map();
+  let version = 0;
+  const cellListeners = new Map(); // key -> Set(fn)
+  const allListeners = new Set();
+  const notify = (keys) => {
+    version++;
+    for (const k of keys) for (const fn of cellListeners.get(k) || []) fn();
+    for (const fn of allListeners) fn();
+  };
+  return {
+    has: (key) => items.has(key),
+    items: () => [...items.values()],
+    version: () => version,
+    // Toggles the given [page, video] cells together: all on if any is off, else all off.
+    toggle(cells) {
+      const keys = cells.map(([p, v]) => `${p.id}|${v.id}`);
+      const allOn = keys.every((k) => items.has(k));
+      items = new Map(items);
+      cells.forEach(([p, v], i) => {
+        if (allOn) items.delete(keys[i]);
+        else items.set(keys[i], { page: p, video: v });
+      });
+      notify(keys);
+    },
+    clear() {
+      const keys = [...items.keys()];
+      items = new Map();
+      notify(keys);
+    },
+    subscribeCell(key, fn) {
+      if (!cellListeners.has(key)) cellListeners.set(key, new Set());
+      cellListeners.get(key).add(fn);
+      return () => cellListeners.get(key).delete(fn);
+    },
+    subscribeAll(fn) {
+      allListeners.add(fn);
+      return () => allListeners.delete(fn);
+    },
+  };
+}
 
 // One cell: posts of this video on this page (plus scheduled ones still waiting) and their views.
-// Clicking it selects / unselects it for scheduling.
-function Cell({ c, page, video, selected }) {
-  const action = selected ? 'Đang chọn · bấm để bỏ chọn' : 'Bấm để chọn';
-  const tip = c
-    ? `${page.name} · ${video.name}\n${c.done} lần đã đăng${c.upcoming ? `, ${c.upcoming} lần sắp đăng` : ''} · ${fmtNum(c.views)} views\n${action}`
-    : `${page.name} · ${video.name}\nChưa đăng · ${action}`;
+// Clicking it selects / unselects it for scheduling. It fills the whole table cell.
+const Cell = memo(({ c, page, video, tint, sel }) => {
+  const key = `${page.id}|${video.id}`;
+  const on = useSyncExternalStore((fn) => sel.subscribeCell(key, fn), () => sel.has(key));
+  const tip = `${page.name} · ${video.name}\n${c
+    ? `${c.done} lần đã đăng${c.upcoming ? `, ${c.upcoming} lần sắp đăng` : ''} · ${fmtNum(c.views)} views`
+    : 'Chưa đăng'}\n${on ? 'Đang chọn · bấm để bỏ chọn' : 'Bấm để chọn'}`;
   return (
-    <Tooltip title={<span style={{ whiteSpace: 'pre-line' }}>{tip}</span>}>
-      <div style={{ minHeight: 34, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-        {c ? (
-          <>
-            <Space size={2}>
-              {c.done > 0 && <Tag color="green" style={{ margin: 0 }}>{c.done}</Tag>}
-              {c.upcoming > 0 && <Tag color="blue" style={{ margin: 0 }}>+{c.upcoming}</Tag>}
-            </Space>
-            {c.done > 0 && <Typography.Text type="secondary" style={{ fontSize: 11, lineHeight: 1.3 }}>{compact(c.views)} view</Typography.Text>}
-          </>
-        ) : <Typography.Text type="secondary">·</Typography.Text>}
-      </div>
-    </Tooltip>
+    <div
+      title={tip}
+      onClick={() => sel.toggle([[page, video]])}
+      style={{
+        minHeight: 38, padding: 2, cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center',
+        justifyContent: 'center', background: on ? '#bae0ff' : tint, boxShadow: on ? 'inset 0 0 0 2px #1677ff' : undefined,
+      }}
+    >
+      {c ? (
+        <>
+          <span>
+            {c.done > 0 && <span style={BADGE.done}>{c.done}</span>}
+            {c.upcoming > 0 && <span style={BADGE.upcoming}>+{c.upcoming}</span>}
+          </span>
+          {c.done > 0 && <span style={{ fontSize: 11, lineHeight: 1.3, color: 'rgba(0,0,0,0.45)' }}>{compact(c.views)} view</span>}
+        </>
+      ) : <span style={{ color: 'rgba(0,0,0,0.25)' }}>·</span>}
+    </div>
+  );
+});
+
+// "Đã chọn N ô" + schedule button; re-renders on its own when the selection changes.
+function SelectionBar({ sel }) {
+  useSyncExternalStore(sel.subscribeAll, sel.version);
+  const items = sel.items();
+  const pages = new Set(items.map((s) => s.page.id));
+  const videos = new Map(items.map((s) => [s.video.id, s.video]));
+  const schedule = () => openScheduleWith({
+    pageIds: [...pages],
+    videos: [...videos.values()],
+    pairs: items.map((s) => ({ pageId: s.page.id, videoId: s.video.id })),
+  });
+  return (
+    <div
+      style={{
+        position: 'sticky', top: 0, zIndex: 5, marginBottom: 12, padding: '8px 12px', borderRadius: 8,
+        background: items.length ? '#e6f4ff' : '#fafafa', border: `1px solid ${items.length ? '#91caff' : '#f0f0f0'}`,
+      }}
+    >
+      <Space wrap>
+        {items.length
+          ? <Typography.Text strong>Đã chọn {items.length} ô ({pages.size} page, {videos.size} video)</Typography.Text>
+          : <Typography.Text type="secondary">Chưa chọn ô nào</Typography.Text>}
+        <Button type="primary" icon={<CalendarOutlined />} disabled={!items.length} onClick={schedule}>
+          Đặt lịch {items.length ? `${items.length} lượt` : ''}
+        </Button>
+        {items.length > 0 && <Button onClick={sel.clear}>Bỏ chọn</Button>}
+      </Space>
+    </div>
   );
 }
 
 // Pages down the side, videos across the top grouped under their folder.
 export default function PageVideoMatrix() {
   const [openVideo, setOpenVideo] = useState(null);
-  // Picked cells, "pageId|videoId" -> { page, video }; kept while changing folder / group.
-  const [selected, setSelected] = useState(() => new Map());
-  // Toggles the given [page, video] cells together: all on if any is off, else all off.
-  const toggle = (cells) => setSelected((cur) => {
-    const next = new Map(cur);
-    const keys = cells.map(([p, v]) => `${p.id}|${v.id}`);
-    const allOn = keys.every((k) => next.has(k));
-    cells.forEach(([p, v], i) => {
-      if (allOn) next.delete(keys[i]);
-      else next.set(keys[i], { page: p, video: v });
-    });
-    return next;
-  });
-  const schedule = () => {
-    const items = [...selected.values()];
-    const videos = [...new Map(items.map((s) => [s.video.id, s.video])).values()];
-    openScheduleWith({
-      pageIds: [...new Set(items.map((s) => s.page.id))],
-      videos,
-      pairs: items.map((s) => ({ pageId: s.page.id, videoId: s.video.id })),
-    });
-  };
+  // Kept while changing folder / group.
+  const [sel] = useState(createSelection);
   const { data: folders = [] } = useApi('/video-folders');
   const { data: groups = [] } = useApi('/groups');
   const [folder, setFolder] = useState('');
@@ -142,7 +212,8 @@ export default function PageVideoMatrix() {
   const headTint = (color) => () => ({ style: { background: color } });
   const cellTint = (color) => () => ({ style: { background: color } });
 
-  const columns = [
+  // Rebuilt only when the data or filters change, never on a selection click.
+  const columns = useMemo(() => [
     {
       title: 'Page',
       dataIndex: 'name',
@@ -151,9 +222,7 @@ export default function PageVideoMatrix() {
       ellipsis: true,
       // Clicking the page name selects / unselects every visible video in its row.
       render: (n, p) => (
-        <Tooltip title={`${n} · bấm để chọn cả dòng`}>
-          <a onClick={() => toggle(folderCols.flatMap((f) => f.videos.map((v) => [p, v])))}>{n}</a>
-        </Tooltip>
+        <a title={`${n} · bấm để chọn cả dòng`} onClick={() => sel.toggle(folderCols.flatMap((f) => f.videos.map((v) => [p, v])))}>{n}</a>
       ),
     },
     {
@@ -163,9 +232,9 @@ export default function PageVideoMatrix() {
       width: 90,
       align: 'center',
       render: (n, p) => (
-        <Tooltip title={`${n} lần, ${p.videosPosted} video khác nhau`}>
-          <b>{n}</b> <Typography.Text type="secondary" style={{ fontSize: 12 }}>({p.videosPosted})</Typography.Text>
-        </Tooltip>
+        <span title={`${n} lần, ${p.videosPosted} video khác nhau`}>
+          <b>{n}</b> <span style={{ fontSize: 12, color: 'rgba(0,0,0,0.45)' }}>({p.videosPosted})</span>
+        </span>
       ),
     },
     ...folderCols.map((f) => ({
@@ -186,7 +255,7 @@ export default function PageVideoMatrix() {
           align: 'center',
           onHeaderCell: headTint(f.tint[1]),
           onCell: cellTint(f.tint[1]),
-          render: (_, p) => (p.byFolder[f.name] ? <b>{p.byFolder[f.name]}</b> : <Typography.Text type="secondary">0</Typography.Text>),
+          render: (_, p) => (p.byFolder[f.name] ? <b>{p.byFolder[f.name]}</b> : <span style={{ color: 'rgba(0,0,0,0.25)' }}>0</span>),
         },
         ...f.videos.map((v) => ({
           key: v.id,
@@ -203,23 +272,12 @@ export default function PageVideoMatrix() {
           width: VIDEO_COL,
           align: 'center',
           onHeaderCell: headTint(f.tint[0]),
-          onCell: (p) => {
-            const on = selected.has(`${p.id}|${v.id}`);
-            return {
-              style: {
-                background: on ? '#bae0ff' : f.tint[0],
-                boxShadow: on ? 'inset 0 0 0 2px #1677ff' : undefined,
-                cursor: 'pointer',
-                padding: 2,
-              },
-              onClick: () => toggle([[p, v]]),
-            };
-          },
-          render: (_, p) => <Cell c={p.cells[v.id]} page={p} video={v} selected={selected.has(`${p.id}|${v.id}`)} />,
+          onCell: () => ({ style: { padding: 0 } }),
+          render: (_, p) => <Cell c={p.cells[v.id]} page={p} video={v} tint={f.tint[0]} sel={sel} />,
         })),
       ],
     })),
-  ];
+  ], [folderCols, sel]); // eslint-disable-line react-hooks/exhaustive-deps
   const videoCount = folderCols.reduce((s, f) => s + f.videos.length, 0);
 
   return (
@@ -243,25 +301,7 @@ export default function PageVideoMatrix() {
         thư mục đó. <b>Bấm vào ô để chọn</b> (chọn được nhiều ô, bấm tên page để chọn cả dòng), rồi bấm <b>Đặt lịch</b>; bấm tên video
         để xem chi tiết.
       </Typography.Paragraph>
-      <div
-        style={{
-          position: 'sticky', top: 0, zIndex: 5, marginBottom: 12, padding: '8px 12px', borderRadius: 8,
-          background: selected.size ? '#e6f4ff' : '#fafafa', border: `1px solid ${selected.size ? '#91caff' : '#f0f0f0'}`,
-        }}
-      >
-        <Space wrap>
-          {selected.size ? (
-            <Typography.Text strong>
-              Đã chọn {selected.size} ô ({new Set([...selected.values()].map((s) => s.page.id)).size} page,{' '}
-              {new Set([...selected.values()].map((s) => s.video.id)).size} video)
-            </Typography.Text>
-          ) : <Typography.Text type="secondary">Chưa chọn ô nào</Typography.Text>}
-          <Button type="primary" icon={<CalendarOutlined />} disabled={!selected.size} onClick={schedule}>
-            Đặt lịch {selected.size ? `${selected.size} lượt` : ''}
-          </Button>
-          {selected.size > 0 && <Button onClick={() => setSelected(new Map())}>Bỏ chọn</Button>}
-        </Space>
-      </div>
+      <SelectionBar sel={sel} />
       {!loading && data && (!data.pages.length || !videoCount) ? (
         <Empty description={!data.pages.length ? 'Nhóm này không có page nào' : 'Thư mục này không có video'} />
       ) : (
