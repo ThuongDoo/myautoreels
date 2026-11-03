@@ -186,7 +186,10 @@ export default function PageVideoMatrix() {
       }
       return row;
     });
-    list.sort(sortBy === 'done' ? (a, b) => b.done - a.done || byName(a, b) : byName);
+    // 'group': pages of a group together (groups by name, ungrouped last), by name inside.
+    const byGroup = (a, b) => (!a.group_name - !b.group_name)
+      || (a.group_name || '').localeCompare(b.group_name || '', 'vi') || byName(a, b);
+    list.sort({ done: (a, b) => b.done - a.done || byName(a, b), group: byGroup }[sortBy] || byName);
     return {
       rows: list,
       folderCols,
@@ -311,7 +314,7 @@ export default function PageVideoMatrix() {
         <Segmented
           value={sortBy}
           onChange={setSortBy}
-          options={[{ value: 'name', label: 'Page theo tên' }, { value: 'done', label: 'Page đăng nhiều nhất' }]}
+          options={[{ value: 'name', label: 'Page theo tên' }, { value: 'group', label: 'Theo nhóm' }, { value: 'done', label: 'Page đăng nhiều nhất' }]}
         />
         <Space><Switch checked={postedOnly} onChange={setPostedOnly} />Chỉ video đã đăng</Space>
       </Space>
