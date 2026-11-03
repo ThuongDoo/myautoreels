@@ -168,8 +168,9 @@ const PRESET_FIELDS = [
 ];
 const PRESET_KEY = 'autoreels.schedulePreset';
 
-// Saved schedule configs. The one used last is applied again when the page opens (once `ready`).
-function SchedulePresets({ form, pageIds, ready }) {
+// Saved schedule configs. The one used last is applied again when the page opens (once `ready`),
+// leaving the `keep` fields alone (pages picked in the page × video table).
+function SchedulePresets({ form, pageIds, ready, keep = [] }) {
   const { message } = App.useApp();
   const { data: list, reload } = useApi('/schedule-presets');
   const [currentId, setCurrentId] = useState();
@@ -179,8 +180,8 @@ function SchedulePresets({ form, pageIds, ready }) {
   const nameInput = useRef(null);
   const current = list?.find((p) => p.id === currentId);
 
-  const apply = (p, quiet) => {
-    const config = Object.fromEntries(PRESET_FIELDS.filter((k) => k in p.config).map((k) => [k, p.config[k]]));
+  const apply = (p, quiet, skip = []) => {
+    const config = Object.fromEntries(PRESET_FIELDS.filter((k) => k in p.config && !skip.includes(k)).map((k) => [k, p.config[k]]));
     // Pages deleted or turned off since the config was saved are dropped.
     if (config.pageIds) config.pageIds = config.pageIds.filter((id) => pageIds.has(id));
     form.setFieldsValue(config);
@@ -193,7 +194,7 @@ function SchedulePresets({ form, pageIds, ready }) {
     if (restored.current || !ready || !list) return;
     restored.current = true;
     const last = list.find((p) => String(p.id) === storage.get(PRESET_KEY));
-    if (last) apply(last, true);
+    if (last) apply(last, true, keep);
   }, [ready, list]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const save = async () => {
@@ -888,9 +889,11 @@ export default function Schedule() {
   // Opened from the page × video table: start with those cells' pages and videos picked, and
   // schedule exactly those page–video pairs.
   const [pairs, setPairs] = useState(null);
+  const [prefilled, setPrefilled] = useState(false);
   useEffect(() => {
     const p = takeSchedulePrefill();
     if (!p) return;
+    setPrefilled(true);
     for (const v of p.videos) videoCache.current[v.id] = v;
     setSelectedKeys(p.videos.map((v) => v.id));
     form.setFieldsValue({ pageIds: p.pageIds, skipUsed: 'none' });
@@ -1029,6 +1032,7 @@ export default function Schedule() {
         form={form}
         pageIds={new Set(enabledPages.map((p) => p.id))}
         ready={!!pagesLoaded && !!settings}
+        keep={prefilled ? ['pageIds', 'skipUsed'] : []}
       />
       <Row gutter={[16, 16]}>
         <Col xs={24} xl={14}>
