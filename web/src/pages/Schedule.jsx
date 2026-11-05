@@ -478,15 +478,22 @@ function MergePreview({ values, videos, hooks, music }) {
   );
 }
 
+// "Quét lại" in a library card's header: lists the Drive folder again, skipping the server's cache.
+const RescanButton = ({ loading, onClick }) => (
+  <Tooltip title="Lấy lại danh sách từ Google Drive (sau khi thêm thư mục / file mới)">
+    <Button size="small" icon={<ReloadOutlined />} loading={loading} onClick={onClick}>Quét lại</Button>
+  </Tooltip>
+);
+
 // "Hook mở đầu" card; its fields belong to the schedule Form that wraps the whole page.
-function HookCard({ values, hooks, loading }) {
+function HookCard({ values, hooks, loading, onRescan }) {
   const [preview, setPreview] = useState(null);
   const enabled = useMemo(() => (hooks?.files || []).filter((h) => !h.disabled), [hooks]);
   const on = values.hookMode === 'random';
   const picked = values.hookKeys?.length ? filesOf(enabled, values.hookKeys).length : enabled.length;
 
   return (
-    <Card title="2. Hook mở đầu">
+    <Card title="2. Hook mở đầu" extra={<RescanButton loading={loading} onClick={onRescan} />}>
       <Form.Item name="hookMode" style={{ marginBottom: on ? 16 : 0 }}>
         <Radio.Group>
           <Radio value="none">Không ghép hook</Radio>
@@ -554,7 +561,7 @@ function HookCard({ values, hooks, loading }) {
 }
 
 // "Nhạc nền" card; its fields belong to the schedule Form that wraps the whole page.
-function MusicCard({ values, music, loading }) {
+function MusicCard({ values, music, loading, onRescan }) {
   const [listening, setListening] = useState(null);
   const files = music?.files || [];
   const mode = values.audioMode || 'keep';
@@ -577,7 +584,7 @@ function MusicCard({ values, music, loading }) {
   };
 
   return (
-    <Card title="3. Nhạc nền">
+    <Card title="3. Nhạc nền" extra={<RescanButton loading={loading} onClick={onRescan} />}>
       <Form.Item
         name="audioMode"
         style={{ marginBottom: mode === 'keep' ? 0 : 16 }}
@@ -902,8 +909,11 @@ export default function Schedule() {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const { data: settings } = useApi('/settings');
-  const { data: music, loading: musicLoading } = useApi('/music');
-  const { data: hooks, loading: hooksLoading } = useApi('/hooks');
+  // Set by "Quét lại": `fresh` makes the server list the Drive folder again.
+  const [musicFresh, setMusicFresh] = useState(0);
+  const [hooksFresh, setHooksFresh] = useState(0);
+  const { data: music, loading: musicLoading } = useApi(musicFresh ? `/music?fresh=${musicFresh}` : '/music');
+  const { data: hooks, loading: hooksLoading } = useApi(hooksFresh ? `/hooks?fresh=${hooksFresh}` : '/hooks');
   useEffect(() => {
     if (settings?.time_slots && !form.isFieldTouched('slots')) {
       form.setFieldValue('slots', normalizeSlots(settings.time_slots.split(',')));
@@ -1044,8 +1054,8 @@ export default function Schedule() {
               folderNames={folderNames}
               folders={folders}
             />
-            <HookCard values={values} hooks={hooks} loading={hooksLoading} />
-            <MusicCard values={values} music={music} loading={musicLoading} />
+            <HookCard values={values} hooks={hooks} loading={hooksLoading} onRescan={() => setHooksFresh(Date.now())} />
+            <MusicCard values={values} music={music} loading={musicLoading} onRescan={() => setMusicFresh(Date.now())} />
           </div>
         </Col>
         <Col xs={24} xl={10}>
