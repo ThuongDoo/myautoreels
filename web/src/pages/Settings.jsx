@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Alert, App, Button, Card, Col, Form, Input, InputNumber, Row, Space, Typography } from 'antd';
+import { ReloadOutlined } from '@ant-design/icons';
 import { api, useApi } from '../api.js';
 import AccountsCard from './Accounts.jsx';
 import BackupsCard from './Backups.jsx';
@@ -7,6 +8,39 @@ import BackupsCard from './Backups.jsx';
 const NUMBER_KEYS = [
   'upload_concurrency', 'preupload_minutes', 'stats_interval_minutes', 'stats_days', 'viral_multiplier', 'viral_min_views',
 ];
+
+const DRIVE_LISTS = [['videos', 'video'], ['music', 'nhạc'], ['hooks', 'hook']];
+
+// Lists the Drive folders again, so files just added show up in the libraries and pickers.
+function DriveRefresh() {
+  const { message } = App.useApp();
+  const [busy, setBusy] = useState(false);
+
+  const refresh = async () => {
+    setBusy(true);
+    try {
+      const r = await api.post('/drive/refresh');
+      const failed = DRIVE_LISTS.filter(([k]) => r[k].error);
+      const done = DRIVE_LISTS.filter(([k]) => r[k].count != null).map(([k, label]) => `${r[k].count} ${label}`);
+      if (done.length) message.success(`Đã cập nhật: ${done.join(', ')}`);
+      for (const [k, label] of failed) message.error(`Không cập nhật được ${label}: ${r[k].error}`, 8);
+      if (!done.length && !failed.length) message.warning('Chưa cấu hình thư mục Drive nào');
+    } catch (e) {
+      message.error(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <Button icon={<ReloadOutlined />} loading={busy} onClick={refresh}>Cập nhật kho từ Drive</Button>
+      <Typography.Paragraph type="secondary" style={{ margin: '4px 0 0', fontSize: 12 }}>
+        Quét lại kho video, kho nhạc, kho hook và danh sách thư mục ở Nguồn video, theo các thư mục đã lưu.
+      </Typography.Paragraph>
+    </div>
+  );
+}
 
 export default function Settings() {
   const { message } = App.useApp();
@@ -43,6 +77,7 @@ export default function Settings() {
 
         <Col xs={24} lg={12}>
           <Card title="Google Drive" style={{ height: '100%' }}>
+            <DriveRefresh />
             <Form.Item label="Service Account JSON" name="google_sa_json" extra="Google Cloud → bật Drive API → tạo Service Account → Keys → tải file JSON và dán nội dung vào đây.">
               <Input.TextArea rows={4} placeholder='{"type": "service_account", ...}' />
             </Form.Item>

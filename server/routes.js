@@ -726,6 +726,33 @@ export function registerRoutes(app) {
   }
   const folderName = (file) => (file ? file.folder || '(thư mục gốc)' : null);
 
+  // Lists the video, music and hook folders on Drive again, without waiting for the caches to
+  // expire. A list that fails keeps its old contents and reports `error`; `count` is null
+  // when that folder isn't set.
+  app.post('/api/drive/refresh', async () => {
+    const count = async (scan) => {
+      try {
+        return { count: (await scan())?.length ?? null };
+      } catch (e) {
+        return { error: e.message };
+      }
+    };
+    folderCache.clear();
+    await videoFoldersScan;
+    const [videos, music, hooks] = await Promise.all([
+      count(async () => {
+        const root = getSetting('drive_folder_id');
+        if (!root) return null;
+        const list = await listVideosRecursive(root);
+        videoFolders = { at: Date.now(), root, files: list, match: driveMatcher(list) };
+        return list;
+      }),
+      count(() => musicFiles(true)),
+      count(() => hookFiles(true)),
+    ]);
+    return { videos, music, hooks };
+  });
+
   const SUMMED = ['posted', 'upcoming', 'failed', 'views', 'interactions', 'viral'];
   app.get('/api/videos', async () => {
     const rows = videoRows.all();
