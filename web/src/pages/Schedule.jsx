@@ -58,6 +58,29 @@ function buildSlotTimes(v, count) {
   return out;
 }
 
+// Times for page × day cells picked in the calendar. `times` covers every day from the first
+// cell through the day after the last, so the server can tell posts on days that weren't picked
+// from posts inside a cell; `pageSlots` lists, per page, the indexes of `times` inside its cells.
+function planCells(cells, v) {
+  const days = cells.map((c) => c.day).sort();
+  const first = dayjs(days[0]);
+  const end = dayjs(days.at(-1)).add(1, 'day').endOf('day');
+  const count = (end.diff(first, 'day') + 1) * normalizeSlots(v.slots).length;
+  const times = buildSlotTimes({ ...v, timing: 'slots', startDate: first }, count).filter((t) => t <= end.valueOf());
+  const slotsOfDay = Map.groupBy(times.map((t, i) => [dayjs(t).format('YYYY-MM-DD'), i]), ([day]) => day);
+  const pageSlots = {};
+  for (const c of cells) {
+    pageSlots[c.pageId] = [...(pageSlots[c.pageId] || []), ...(slotsOfDay.get(c.day) || []).map(([, i]) => i)];
+  }
+  const used = [...new Set(Object.values(pageSlots).flat())].sort((a, b) => a - b);
+  return {
+    times,
+    pageSlots,
+    usable: used.map((i) => times[i]),
+    fewest: Math.min(...Object.values(pageSlots).map((l) => l.length)),
+  };
+}
+
 const SNIPPETS = [
   { label: 'Tên video', text: '{filename}', tip: 'Tên file video (bỏ đuôi .mp4)' },
   { label: 'Tên page', text: '{page}', tip: 'Tên page sẽ đăng' },
@@ -894,8 +917,10 @@ export default function Schedule() {
   }, [enabledPages]);
 
   // Opened from the page × video table: start with those cells' pages and videos picked, and
-  // schedule exactly those page–video pairs.
+  // schedule exactly those page–video pairs. Opened from the calendar: post only in the picked
+  // page × day cells (`dayCells`).
   const [pairs, setPairs] = useState(null);
+  const [dayCells, setDayCells] = useState(null);
   const [prefilled, setPrefilled] = useState(false);
   useEffect(() => {
     const p = takeSchedulePrefill();
@@ -903,9 +928,12 @@ export default function Schedule() {
     setPrefilled(true);
     for (const v of p.videos) videoCache.current[v.id] = v;
     setSelectedKeys(p.videos.map((v) => v.id));
-    form.setFieldsValue({ pageIds: p.pageIds, skipUsed: 'none' });
+    form.setFieldsValue({ pageIds: p.pageIds, skipUsed: 'none', ...(p.cells ? { timing: 'slots' } : null) });
     if (p.pairs?.length) setPairs(p.pairs);
-    message.info(`Đã chọn sẵn ${p.pairs?.length || p.videos.length} lượt đăng, chỉnh giờ đăng rồi bấm Tạo lịch đăng`);
+    if (p.cells?.length) setDayCells(p.cells);
+    message.info(p.cells?.length
+      ? `Đã chọn sẵn ${p.cells.length} ô, chọn video rồi bấm Tạo lịch đăng`
+      : `Đã chọn sẵn ${p.pairs?.length || p.videos.length} lượt đăng, chỉnh giờ đăng rồi bấm Tạo lịch đăng`);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const { data: settings } = useApi('/settings');
@@ -941,7 +969,8 @@ export default function Schedule() {
     : 0;
   const total = activePairs ? activePairs.length : values.mode === 'split' ? V : V * P;
   const perPage = activePairs ? pairsPerPage : values.mode === 'split' ? Math.ceil(V / Math.max(P, 1)) : V;
-  const slotTimes = buildSlotTimes(values, perPage);
+  const cellPlan = dayCells ? planCells(dayCells, values) : null;
+  const slotTimes = cellPlan ? cellPlan.usable : buildSlotTimes(values, perPage);
   const postsPerSlot = activePairs ? new Set(activePairs.map((p) => p.pageId)).size : values.mode === 'split' ? Math.min(P, V) : P;
   const avgGapSec = ((values.gapMinSec || 0) + (values.gapMaxSec || 0)) / 2;
   const spreadMin = (Math.max(postsPerSlot - 1, 0) * avgGapSec) / 60;
@@ -966,6 +995,9 @@ export default function Schedule() {
     if (foldersLoading) return message.warning('Đang tải danh sách video trong thư mục, chờ chút');
     if (!V) return message.warning(skippedCount ? 'Tất cả video đã chọn đều đã từng đăng' : 'Chưa chọn video nào');
     if (activePairs && !activePairs.length) return message.warning('Không còn ô page × video nào được chọn');
+    if (cellPlan && cellPlan.fewest < perPage) {
+      return message.warning(`Có page chỉ còn ${cellPlan.fewest} khung giờ trong các ô đã chọn, nhưng cần ${perPage}. Hãy thêm khung giờ, giảm video hoặc chọn thêm ô.`);
+    }
     if (slotTimes.length < perPage) return message.warning('Chưa có khung giờ / giờ bắt đầu');
     if (checkCaption(v.captionTemplate).length) return message.error('Caption đang có lỗi, xem ngay dưới ô Caption');
     setSubmitting(true);
@@ -977,7 +1009,8 @@ export default function Schedule() {
         pairs: activePairs || undefined,
         shuffle: v.shuffle,
         // Spare slots so the server can skip slots where a page already has a post.
-        slotTimes: buildSlotTimes(values, perPage + SPARE_SLOTS),
+        slotTimes: cellPlan ? cellPlan.times : buildSlotTimes(values, perPage + SPARE_SLOTS),
+        pageSlots: cellPlan?.pageSlots,
         gapMinSec: v.gapMinSec,
         gapMaxSec: v.gapMaxSec,
         captionTemplate: v.captionTemplate,
@@ -1001,6 +1034,7 @@ export default function Schedule() {
       );
       onSelect([]);
       setPairs(null);
+      setDayCells(null);
     } catch (e) {
       message.error(e.message);
     } finally {
@@ -1042,7 +1076,7 @@ export default function Schedule() {
         form={form}
         pageIds={new Set(enabledPages.map((p) => p.id))}
         ready={!!pagesLoaded && !!settings}
-        keep={prefilled ? ['pageIds', 'skipUsed'] : []}
+        keep={prefilled ? ['pageIds', 'skipUsed', ...(dayCells ? ['timing'] : [])] : []}
       />
       <Row gutter={[16, 16]}>
         <Col xs={24} xl={14}>
@@ -1068,6 +1102,7 @@ export default function Schedule() {
                 mode="multiple"
                 allowClear
                 placeholder="Ví dụ: Vẽ, Yoga..."
+                disabled={!!dayCells}
                 value={selectedGroups}
                 onChange={pickGroups}
                 options={Object.entries(groups).map(([g, ids]) => ({ value: g, label: `${g} (${ids.length} page)` }))}
@@ -1080,7 +1115,7 @@ export default function Schedule() {
               label={`Pages (${P} đã chọn)`}
               name="pageIds"
               rules={[{ required: true, message: 'Chọn ít nhất 1 page' }]}
-              extra={(
+              extra={!dayCells && (
                 <Space size={4}>
                   Có thể bỏ bớt hoặc thêm page lẻ.
                   <Button size="small" type="link" onClick={() => form.setFieldValue('pageIds', enabledPages.map((p) => p.id))}>
@@ -1095,6 +1130,7 @@ export default function Schedule() {
                 allowClear
                 maxTagCount="responsive"
                 placeholder="Chọn page"
+                disabled={!!dayCells}
                 optionFilterProp="label"
                 options={pageOptions}
               />
@@ -1115,6 +1151,23 @@ export default function Schedule() {
                 <Radio value="used">Bỏ video đã đăng hoặc đang chờ đăng</Radio>
               </Radio.Group>
             </Form.Item>
+
+            {dayCells && (
+              <Alert
+                style={{ marginBottom: 16 }}
+                type="success"
+                showIcon
+                message={`Lên lịch vào ${dayCells.length} ô đã chọn ở Lịch tổng quan`}
+                description={(
+                  <>
+                    {new Set(dayCells.map((c) => c.pageId)).size} page, {new Set(dayCells.map((c) => c.day)).size} ngày.
+                    Mỗi page chỉ đăng trong các ngày đã chọn của page đó, theo khung giờ bên dưới, bắt đầu từ ngày sớm nhất.
+                    Khung giờ đã có lịch sẽ được bỏ qua.{' '}
+                    <a onClick={() => setDayCells(null)}>Chuyển sang lên lịch thường</a>
+                  </>
+                )}
+              />
+            )}
 
             {activePairs ? (
               <Alert
@@ -1145,7 +1198,7 @@ export default function Schedule() {
             </Form.Item>
 
             <Form.Item label="Thời gian đăng" name="timing">
-              <Radio.Group optionType="button" buttonStyle="solid">
+              <Radio.Group optionType="button" buttonStyle="solid" disabled={!!dayCells}>
                 <Radio value="slots">Theo khung giờ</Radio>
                 <Radio value="interval">Cách đều</Radio>
               </Radio.Group>
@@ -1180,9 +1233,11 @@ export default function Schedule() {
                 >
                   <Select mode="tags" options={HOUR_OPTIONS} tokenSeparators={[',', ' ']} placeholder="07:00, 11:00, 20:00" />
                 </Form.Item>
-                <Form.Item label="Bắt đầu từ ngày" name="startDate" extra="Khung giờ đã qua trong hôm nay sẽ được bỏ qua.">
-                  <DatePicker format="DD/MM/YYYY" style={{ width: '100%' }} />
-                </Form.Item>
+                {!dayCells && (
+                  <Form.Item label="Bắt đầu từ ngày" name="startDate" extra="Khung giờ đã qua trong hôm nay sẽ được bỏ qua.">
+                    <DatePicker format="DD/MM/YYYY" style={{ width: '100%' }} />
+                  </Form.Item>
+                )}
               </>
             )}
 

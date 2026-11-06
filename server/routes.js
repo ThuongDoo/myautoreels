@@ -914,6 +914,8 @@ export function registerRoutes(app) {
       hookMode = 'none', hookFileIds = [], hookVisual = 'tail',
       // mode 'pairs': exactly these [{ pageId, videoId }] (cells picked in the page × video table).
       pairs = [],
+      // { pageId: [indexes of slotTimes] }: the only slots these pages may use (cells picked in the calendar).
+      pageSlots,
     } = req.body || {};
     if (mode === 'pairs' && !pairs.length) throw bad('Chưa chọn ô page × video nào');
     if (!videos.length) throw bad('Chưa chọn video');
@@ -945,9 +947,15 @@ export function registerRoutes(app) {
 
     const cursor = new Map();
     let skipped = 0;
+    const onlySlots = new Map(Object.entries(pageSlots || {}).map(([id, list]) => [id, new Set(list.map(Number))]));
     const nextSlot = (pageId) => {
+      const only = onlySlots.get(pageId);
+      const allowed = (i) => !only || only.has(i);
       let i = cursor.get(pageId) ?? 0;
-      while (busy.get(pageId).has(i)) { i++; skipped++; }
+      while (busy.get(pageId).has(i) || (i < times.length && !allowed(i))) {
+        if (allowed(i)) skipped++;
+        i++;
+      }
       cursor.set(pageId, i + 1);
       return i;
     };
@@ -971,7 +979,11 @@ export function registerRoutes(app) {
       for (const page of pages) order(videos).forEach((video) => plan.push({ page, video, slot: nextSlot(page.id) }));
     }
     const slotsNeeded = Math.max(...plan.map((p) => p.slot)) + 1;
-    if (slotsNeeded > times.length) throw bad(`Cần ${slotsNeeded} khung giờ nhưng chỉ có ${times.length}`);
+    if (slotsNeeded > times.length) {
+      throw bad(pageSlots
+        ? 'Các ô đã chọn không đủ khung giờ trống cho số video này. Hãy thêm khung giờ, giảm video hoặc chọn thêm ô.'
+        : `Cần ${slotsNeeded} khung giờ nhưng chỉ có ${times.length}`);
+    }
     if (audioMode !== 'keep') {
       if (!['replace', 'mix'].includes(audioMode)) throw bad('Kiểu âm thanh không hợp lệ');
       if (!MUSIC_PICKS.includes(musicPick)) throw bad('Cách chọn nhạc không hợp lệ');

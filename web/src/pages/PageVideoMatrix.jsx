@@ -8,6 +8,7 @@ import { CalendarOutlined, FolderOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { fmtNum, groupColor, useApi } from '../api.js';
 import { openScheduleWith } from '../prefill.js';
+import { createSelection } from '../selection.js';
 import VideoDrawer from './VideoDrawer.jsx';
 
 const NO_GROUP = '__none__';
@@ -30,49 +31,7 @@ const badge = (color, bg, border) => ({
 });
 const BADGE = { done: badge('#389e0d', '#f6ffed', '#b7eb8f'), upcoming: badge('#0958d9', '#e6f4ff', '#91caff') };
 
-// Picked cells live outside React state so a click re-renders only the cells it changes,
-// not the whole table. "pageId|videoId" -> { page, video }.
-function createSelection() {
-  let items = new Map();
-  let version = 0;
-  const cellListeners = new Map(); // key -> Set(fn)
-  const allListeners = new Set();
-  const notify = (keys) => {
-    version++;
-    for (const k of keys) for (const fn of cellListeners.get(k) || []) fn();
-    for (const fn of allListeners) fn();
-  };
-  return {
-    has: (key) => items.has(key),
-    items: () => [...items.values()],
-    version: () => version,
-    // Toggles the given [page, video] cells together: all on if any is off, else all off.
-    toggle(cells) {
-      const keys = cells.map(([p, v]) => `${p.id}|${v.id}`);
-      const allOn = keys.every((k) => items.has(k));
-      items = new Map(items);
-      cells.forEach(([p, v], i) => {
-        if (allOn) items.delete(keys[i]);
-        else items.set(keys[i], { page: p, video: v });
-      });
-      notify(keys);
-    },
-    clear() {
-      const keys = [...items.keys()];
-      items = new Map();
-      notify(keys);
-    },
-    subscribeCell(key, fn) {
-      if (!cellListeners.has(key)) cellListeners.set(key, new Set());
-      cellListeners.get(key).add(fn);
-      return () => cellListeners.get(key).delete(fn);
-    },
-    subscribeAll(fn) {
-      allListeners.add(fn);
-      return () => allListeners.delete(fn);
-    },
-  };
-}
+const matrixCell = (page, video) => ({ key: `${page.id}|${video.id}`, page, video });
 
 // One cell: posts of this video on this page (plus scheduled ones still waiting) and their views.
 // Clicking it selects / unselects it for scheduling. It fills the whole table cell.
@@ -86,7 +45,7 @@ const Cell = memo(({ c, page, video, tint, sel }) => {
   return (
     <div
       title={tip}
-      onClick={() => sel.toggle([[page, video]])}
+      onClick={() => sel.toggle([matrixCell(page, video)])}
       style={{
         minHeight: 38, padding: 2, cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center',
         justifyContent: 'center', background: on ? '#bae0ff' : tint, boxShadow: on ? 'inset 0 0 0 2px #1677ff' : undefined,
@@ -235,7 +194,7 @@ export default function PageVideoMatrix() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
           <a
             title={`${n} · bấm để chọn cả dòng`}
-            onClick={() => sel.toggle(folderCols.flatMap((f) => f.videos.map((v) => [p, v])))}
+            onClick={() => sel.toggle(folderCols.flatMap((f) => f.videos.map((v) => matrixCell(p, v))))}
             style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}
           >
             {n}

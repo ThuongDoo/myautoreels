@@ -1,7 +1,12 @@
-import { useMemo, useState } from 'react';
+import {
+  memo, useMemo, useState, useSyncExternalStore,
+} from 'react';
 import { Button, Card, DatePicker, Select, Space, Switch, Table, Tag, Tooltip, Typography } from 'antd';
+import { CalendarOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { groupColor, useApi } from '../api.js';
+import { openScheduleWith } from '../prefill.js';
+import { createSelection } from '../selection.js';
 import { STATUS } from '../status.js';
 
 const NO_GROUP = '__none__';
@@ -15,7 +20,76 @@ function cellStyle(jobs) {
   return { background: '#69b1ff', color: '#fff' };
 }
 
+const dayCell = (pageId, day) => ({ key: `${pageId}|${day}`, pageId, day });
+
+// One page on one day. `pickable` cells select / unselect on click, for scheduling.
+const DayCell = memo(({ list, pageId, day, pickable, sel }) => {
+  const key = `${pageId}|${day}`;
+  const on = useSyncExternalStore((fn) => sel.subscribeCell(key, fn), () => sel.has(key));
+  const body = (
+    <div
+      onClick={pickable ? () => sel.toggle([dayCell(pageId, day)]) : undefined}
+      style={{
+        padding: '8px 0',
+        fontWeight: list ? 600 : undefined,
+        cursor: pickable ? 'pointer' : 'default',
+        ...(on ? { background: '#bae0ff', color: '#0958d9', boxShadow: 'inset 0 0 0 2px #1677ff' } : null),
+      }}
+    >
+      {list ? list.length : '–'}
+    </div>
+  );
+  if (!list) return body;
+  return (
+    <Tooltip
+      title={list.map((j) => (
+        <div key={j.id}>
+          {dayjs(j.scheduled_at).format('HH:mm')} ·{' '}
+          {j.external
+            ? <>Đăng trên Facebook · {(j.drive_file_name || '(không caption)').replace(/\s+/g, ' ').slice(0, 50)}</>
+            : <>{STATUS[j.status]?.label || j.status} · {j.drive_file_name}</>}
+        </div>
+      ))}
+    >
+      {body}
+    </Tooltip>
+  );
+});
+
+// "Đã chọn N ô" + schedule button; re-renders on its own when the selection changes.
+function SelectionBar({ sel }) {
+  useSyncExternalStore(sel.subscribeAll, sel.version);
+  const items = sel.items();
+  const pageIds = [...new Set(items.map((c) => c.pageId))];
+  const dayCount = new Set(items.map((c) => c.day)).size;
+  return (
+    <div
+      style={{
+        marginBottom: 12, padding: '8px 12px', borderRadius: 8,
+        background: items.length ? '#e6f4ff' : '#fafafa', border: `1px solid ${items.length ? '#91caff' : '#f0f0f0'}`,
+      }}
+    >
+      <Space wrap>
+        {items.length
+          ? <Typography.Text strong>Đã chọn {items.length} ô ({pageIds.length} page, {dayCount} ngày)</Typography.Text>
+          : <Typography.Text type="secondary">Bấm vào ô để chọn. Bấm tên page hoặc ngày để chọn các ô trống của dòng / cột đó.</Typography.Text>}
+        <Button
+          type="primary"
+          icon={<CalendarOutlined />}
+          disabled={!items.length}
+          onClick={() => openScheduleWith({ pageIds, cells: items.map(({ pageId, day }) => ({ pageId, day })) })}
+        >
+          Đặt lịch {items.length ? `${items.length} ô` : ''}
+        </Button>
+        {items.length > 0 && <Button onClick={sel.clear}>Bỏ chọn</Button>}
+      </Space>
+    </div>
+  );
+}
+
 export default function Calendar() {
+  // Kept while changing the date range or filters.
+  const [sel] = useState(createSelection);
   const [range, setRange] = useState(() => [dayjs().startOf('day'), dayjs().add(13, 'day').startOf('day')]);
   const [groupFilter, setGroupFilter] = useState('');
   const [onlyMissing, setOnlyMissing] = useState(false);
@@ -58,6 +132,12 @@ export default function Calendar() {
   const pagesPerDay = days.map((d) => rows.filter((r) => r.cells[d.format('YYYY-MM-DD')]).length);
   const missingPages = rows.filter((r) => r.missing > 0).length;
 
+  // Days already over can't be scheduled, nor can pages that are switched off.
+  const pickable = (p, d) => !!p.enabled && !d.isBefore(dayjs(), 'day');
+  const emptyCells = (list) => list
+    .filter(([p, d]) => pickable(p, d) && !p.cells[d.format('YYYY-MM-DD')])
+    .map(([p, d]) => dayCell(p.id, d.format('YYYY-MM-DD')));
+
   const columns = [
     {
       title: 'Page',
@@ -68,7 +148,15 @@ export default function Calendar() {
       sorter: (a, b) => a.name.localeCompare(b.name),
       render: (n, p) => (
         <Space size={4}>
-          <Typography.Text ellipsis style={{ maxWidth: 140 }} type={p.enabled ? undefined : 'secondary'}>{n}</Typography.Text>
+          <Typography.Text
+            ellipsis
+            title={`${n} · bấm để chọn các ô trống`}
+            style={{ maxWidth: 140, cursor: 'pointer' }}
+            type={p.enabled ? undefined : 'secondary'}
+            onClick={() => sel.toggle(emptyCells(days.map((d) => [p, d])))}
+          >
+            {n}
+          </Typography.Text>
           {p.group_name && <Tag color={groupColor(p.group_name)} style={{ margin: 0 }}>{p.group_name}</Tag>}
         </Space>
       ),
@@ -91,30 +179,17 @@ export default function Calendar() {
         width: 52,
         align: 'center',
         title: (
-          <div style={{ lineHeight: 1.2, fontWeight: today ? 700 : 400, color: today ? '#1677ff' : weekend ? '#cf1322' : undefined }}>
+          <div
+            title="Bấm để chọn các ô trống của ngày này"
+            onClick={() => sel.toggle(emptyCells(rows.map((p) => [p, d])))}
+            style={{ lineHeight: 1.2, cursor: 'pointer', fontWeight: today ? 700 : 400, color: today ? '#1677ff' : weekend ? '#cf1322' : undefined }}
+          >
             <div style={{ fontSize: 11 }}>{['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'][d.day()]}</div>
             <div>{d.format('DD/MM')}</div>
           </div>
         ),
         onCell: (p) => ({ style: { ...cellStyle(p.cells[key]), padding: 0 } }),
-        render: (_, p) => {
-          const list = p.cells[key];
-          if (!list) return <div style={{ padding: '8px 0' }}>–</div>;
-          return (
-            <Tooltip
-              title={list.map((j) => (
-                <div key={j.id}>
-                  {dayjs(j.scheduled_at).format('HH:mm')} ·{' '}
-                  {j.external
-                    ? <>Đăng trên Facebook · {(j.drive_file_name || '(không caption)').replace(/\s+/g, ' ').slice(0, 50)}</>
-                    : <>{STATUS[j.status]?.label || j.status} · {j.drive_file_name}</>}
-                </div>
-              ))}
-            >
-              <div style={{ padding: '8px 0', fontWeight: 600, cursor: 'default' }}>{list.length}</div>
-            </Tooltip>
-          );
-        },
+        render: (_, p) => <DayCell list={p.cells[key]} pageId={p.id} day={key} pickable={pickable(p, d)} sel={sel} />,
       };
     }),
   ];
@@ -165,6 +240,8 @@ export default function Calendar() {
         </Typography.Text>
       </Space>
 
+      <SelectionBar sel={sel} />
+
       <Table
         rowKey="id"
         size="small"
@@ -173,7 +250,7 @@ export default function Calendar() {
         dataSource={rows}
         columns={columns}
         pagination={false}
-        scroll={{ x: 290 + days.length * 52, y: 'calc(100vh - 330px)' }}
+        scroll={{ x: 290 + days.length * 52, y: 'calc(100vh - 390px)' }}
         summary={() => (
           <Table.Summary fixed>
             <Table.Summary.Row>
