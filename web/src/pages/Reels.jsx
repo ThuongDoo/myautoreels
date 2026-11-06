@@ -19,12 +19,33 @@ const HISTORY_METRICS = {
   shares: { label: 'Share' },
 };
 
+// Plays the reel in the app. Falls back to a note when Facebook gives no playable file.
+function ReelPlayer({ reel }) {
+  const { data, error } = useApi(`/reels/${reel.video_id}/source`);
+  const [broken, setBroken] = useState(false);
+  if (error || broken || (data && !data.url)) {
+    return (
+      <Typography.Paragraph type="secondary">
+        Không phát được reel trong app{error ? `: ${error.message}` : ''}. Hãy mở reel trên Facebook bằng liên kết bên dưới.
+      </Typography.Paragraph>
+    );
+  }
+  return (
+    <div style={{ background: '#000', borderRadius: 8, marginBottom: 16, height: 480, display: 'flex', justifyContent: 'center' }}>
+      {data?.url && (
+        <video src={data.url} controls playsInline preload="metadata" onError={() => setBroken(true)} style={{ height: '100%', maxWidth: '100%' }} />
+      )}
+    </div>
+  );
+}
+
 export function HistoryDrawer({ reel, onClose, onOpenVideo }) {
   const [metric, setMetric] = useState('views');
   const { data = [], loading } = useApi(`/reels/${reel.video_id}/history`);
   const points = data.map((d) => ({ ...d, time: dayjs(d.ts).format('DD/MM HH:mm') }));
   return (
     <Drawer open width={640} onClose={onClose} title={reel.page_name}>
+      <ReelPlayer reel={reel} />
       <Typography.Paragraph ellipsis={{ rows: 3, expandable: true }}>{reel.caption}</Typography.Paragraph>
       <Typography.Paragraph>
         Video gốc:{' '}

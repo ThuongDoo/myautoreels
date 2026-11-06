@@ -1135,6 +1135,13 @@ export function registerRoutes(app) {
     return [...byPage.values()];
   });
 
+  app.get('/api/reels/:id/source', async (req) => {
+    const reel = db.prepare('SELECT page_id FROM reels WHERE video_id = ?').get(req.params.id);
+    if (!reel) throw bad('Không tìm thấy reel');
+    const page = pageWithToken(reel.page_id);
+    return { url: await fb.getVideoSource(req.params.id, page.access_token) };
+  });
+
   app.get('/api/reels/:id/history', async (req) =>
     db.prepare('SELECT ts, views, likes, comments, shares FROM reel_stats WHERE video_id = ? ORDER BY ts').all(req.params.id));
 

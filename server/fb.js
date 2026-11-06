@@ -180,6 +180,11 @@ export function getVideoStatus(videoId, token) {
   return graph('GET', `/${videoId}`, { fields: 'status,permalink_url' }, token);
 }
 
+// Temporary link to the video file; Facebook expires it, so it is read when needed, not stored.
+export async function getVideoSource(videoId, token) {
+  return (await graph('GET', `/${videoId}`, { fields: 'source' }, token)).source;
+}
+
 // --- Stats ---
 
 // Fetched as nested fields of the reel list, so one call per page returns every reel's
