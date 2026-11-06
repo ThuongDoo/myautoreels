@@ -135,11 +135,38 @@ export function registerRoutes(app) {
   });
 
   // --- Pages ---
-  app.get('/api/pages', async () => db.prepare(`
-    SELECT p.id, p.name, p.picture, p.enabled, p.fb_hidden, p.group_name, p.synced_at, p.account_id, a.name AS account_name
-    FROM pages p LEFT JOIN fb_accounts a ON a.id = p.account_id
-    ORDER BY p.name
-  `).all());
+  app.get('/api/pages', async () => {
+    const tags = Map.groupBy(db.prepare('SELECT page_id, tag FROM page_tags ORDER BY tag').all(), (t) => t.page_id);
+    return db.prepare(`
+      SELECT p.id, p.name, p.picture, p.enabled, p.fb_hidden, p.group_name, p.synced_at, p.account_id, a.name AS account_name
+      FROM pages p LEFT JOIN fb_accounts a ON a.id = p.account_id
+      ORDER BY p.name
+    `).all().map((p) => ({ ...p, tags: (tags.get(p.id) || []).map((t) => t.tag) }));
+  });
+
+  // Adds / removes tags on many pages at once. A tag differing only in case from an existing
+  // one is the same tag, so "Nam" and "nam" don't split the pages.
+  app.post('/api/pages/tags', async (req) => {
+    const { ids = [], add = [], remove = [] } = req.body || {};
+    if (!ids.length) throw bad('Chưa chọn page');
+    const known = new Map(db.prepare('SELECT DISTINCT tag FROM page_tags').all().map(({ tag }) => [tag.toLocaleLowerCase('vi'), tag]));
+    const clean = (list) => [...new Set(list.map((t) => String(t).trim().slice(0, 50)).filter(Boolean).map((t) => {
+      const key = t.toLocaleLowerCase('vi');
+      if (!known.has(key)) known.set(key, t);
+      return known.get(key);
+    }))];
+    const adding = clean(add);
+    const removing = clean(remove);
+    const insert = db.prepare('INSERT OR IGNORE INTO page_tags (page_id, tag) VALUES (?, ?)');
+    const del = db.prepare('DELETE FROM page_tags WHERE page_id = ? AND tag = ?');
+    transaction(() => {
+      for (const id of ids) {
+        for (const tag of removing) del.run(id, tag);
+        for (const tag of adding) insert.run(id, tag);
+      }
+    });
+    return { ok: true };
+  });
 
   // Everything the page detail drawer needs beyond the reels already loaded for the chosen period.
   app.get('/api/pages/:id/summary', async (req) => {

@@ -27,6 +27,8 @@ export default function Pages() {
   const [selected, setSelected] = useState([]);
   const [q, setQ] = useState('');
   const [groupFilter, setGroupFilter] = useState('');
+  const [tagFilter, setTagFilter] = useState([]);
+  const [bulkTags, setBulkTags] = useState([]);
   const [groupPickerOpen, setGroupPickerOpen] = useState(false);
   const [showGroups, setShowGroups] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -79,6 +81,22 @@ export default function Pages() {
     }
   };
 
+  const changeTags = async (ids, add, remove, successText) => {
+    try {
+      await api.post('/pages/tags', { ids, add, remove });
+      if (successText) message.success(successText);
+      reload({ silent: true });
+      return true;
+    } catch (e) {
+      message.error(e.message);
+      return false;
+    }
+  };
+
+  const bulkTag = async (add, remove, successText) => {
+    if (await changeTags(selected, add, remove, successText)) setBulkTags([]);
+  };
+
   const moveToGroup = async (name) => {
     setGroupPickerOpen(false);
     if (await update(selected, { group_name: name }, `Đã chuyển ${selected.length} page vào nhóm "${name}"`)) {
@@ -92,13 +110,23 @@ export default function Pages() {
     label: <Space><Tag color={groupColor(g.name)} style={{ margin: 0 }}>{g.name}</Tag><Typography.Text type="secondary">{g.total} page</Typography.Text></Space>,
   }));
 
+  // Every tag in use with its page count, in name order.
+  const tagCounts = [...data.flatMap((p) => p.tags).reduce((m, t) => m.set(t, (m.get(t) || 0) + 1), new Map())]
+    .sort(([a], [b]) => a.localeCompare(b, 'vi', { numeric: true }));
+  const tagOptions = tagCounts.map(([t]) => ({ value: t, label: t }));
+  const renderTag = ({ value, closable, onClose }) => (
+    <Tag color={groupColor(value)} closable={closable} onClose={onClose} style={{ marginInlineEnd: 4 }}>{value}</Tag>
+  );
+
   const needle = q.toLowerCase();
   const rows = data.filter((p) => (!groupFilter || (p.group_name || NO_GROUP) === groupFilter)
     && (!accountFilter || p.account_id === accountFilter)
+    && (!tagFilter.length || tagFilter.some((t) => p.tags.includes(t)))
     && (!needle
       || p.name.toLowerCase().includes(needle)
       || p.id.includes(needle)
-      || (p.group_name || '').toLowerCase().includes(needle)));
+      || (p.group_name || '').toLowerCase().includes(needle)
+      || p.tags.some((t) => t.toLowerCase().includes(needle))));
 
   return (
     <Card
@@ -156,8 +184,24 @@ export default function Pages() {
         <Button size="small" icon={<SettingOutlined />} onClick={() => setShowGroups(true)}>Tạo / quản lý nhóm</Button>
       </Space>
 
+      {tagCounts.length > 0 && (
+        <Space wrap size={[6, 8]} style={{ marginBottom: 12, display: 'flex' }}>
+          <Typography.Text type="secondary">Tag:</Typography.Text>
+          {tagCounts.map(([t, n]) => (
+            <Tag.CheckableTag
+              key={t}
+              checked={tagFilter.includes(t)}
+              onChange={(on) => setTagFilter((cur) => (on ? [...cur, t] : cur.filter((x) => x !== t)))}
+            >
+              {t} ({n})
+            </Tag.CheckableTag>
+          ))}
+          {tagFilter.length > 0 && <Button size="small" type="link" onClick={() => setTagFilter([])}>Bỏ lọc tag</Button>}
+        </Space>
+      )}
+
       <Space wrap style={{ marginBottom: 16 }}>
-        <Input.Search placeholder="Tìm tên, ID, nhóm..." allowClear onChange={(e) => setQ(e.target.value)} style={{ width: 260 }} />
+        <Input.Search placeholder="Tìm tên, ID, nhóm, tag..." allowClear onChange={(e) => setQ(e.target.value)} style={{ width: 260 }} />
         {selected.length > 0 ? (
           <>
             <Typography.Text strong>Đã chọn {selected.length} page:</Typography.Text>
@@ -184,6 +228,30 @@ export default function Pages() {
               )}
             />
             <Button onClick={() => update(selected, { group_name: null }, `Đã bỏ ${selected.length} page khỏi nhóm`)}>Bỏ khỏi nhóm</Button>
+            <Space.Compact>
+              <Select
+                mode="tags"
+                placeholder="Nhập hoặc chọn tag..."
+                style={{ width: 230 }}
+                value={bulkTags}
+                onChange={setBulkTags}
+                options={tagOptions}
+                tokenSeparators={[',']}
+                tagRender={renderTag}
+              />
+              <Button
+                disabled={!bulkTags.length}
+                onClick={() => bulkTag(bulkTags, [], `Đã gắn ${bulkTags.length} tag cho ${selected.length} page`)}
+              >
+                Gắn tag
+              </Button>
+              <Button
+                disabled={!bulkTags.length}
+                onClick={() => bulkTag([], bulkTags, `Đã gỡ ${bulkTags.length} tag khỏi ${selected.length} page`)}
+              >
+                Gỡ tag
+              </Button>
+            </Space.Compact>
             <Button icon={<PictureOutlined />} onClick={() => setImagePicker('avatar')}>Đổi avatar</Button>
             <Button icon={<PictureOutlined />} onClick={() => setImagePicker('cover')}>Đổi ảnh bìa</Button>
             <Button onClick={() => update(selected, { enabled: true })}>Bật</Button>
@@ -191,7 +259,7 @@ export default function Pages() {
             <Button type="link" onClick={() => setSelected([])}>Bỏ chọn</Button>
           </>
         ) : (
-          <Typography.Text type="secondary">Tick chọn page để chuyển vào nhóm (ngách).</Typography.Text>
+          <Typography.Text type="secondary">Tick chọn page để chuyển vào nhóm (ngách) hoặc gắn tag.</Typography.Text>
         )}
       </Space>
       <Table
@@ -236,6 +304,25 @@ export default function Pages() {
                 options={groupOptions}
                 labelRender={({ value }) => <Tag color={groupColor(value)} style={{ margin: 0 }}>{value}</Tag>}
                 onChange={(v) => update([p.id], { group_name: v || null })}
+              />
+            ),
+          },
+          {
+            title: 'Tag',
+            dataIndex: 'tags',
+            width: 260,
+            render: (tags, p) => (
+              <Select
+                mode="tags"
+                size="small"
+                variant="borderless"
+                style={{ width: '100%' }}
+                value={tags}
+                placeholder="Thêm tag..."
+                options={tagOptions}
+                tokenSeparators={[',']}
+                tagRender={renderTag}
+                onChange={(next) => changeTags([p.id], next.filter((t) => !tags.includes(t)), tags.filter((t) => !next.includes(t)))}
               />
             ),
           },

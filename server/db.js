@@ -146,6 +146,15 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_video_notes_name ON video_notes(name);
 `);
 
+// Free tags on pages. A page has at most one group, but any number of tags.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS page_tags (
+    page_id TEXT NOT NULL,
+    tag TEXT NOT NULL,
+    PRIMARY KEY (page_id, tag)
+  );
+`);
+
 // Where video ideas come from. `folders`: JSON list of Drive folder paths, not ids, so they
 // still match after a folder is deleted and uploaded again.
 db.exec(`
