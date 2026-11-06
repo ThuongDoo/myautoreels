@@ -150,7 +150,8 @@ export function registerRoutes(app) {
     const { ids = [], add = [], remove = [] } = req.body || {};
     if (!ids.length) throw bad('Chưa chọn page');
     const known = new Map(db.prepare('SELECT DISTINCT tag FROM page_tags').all().map(({ tag }) => [tag.toLocaleLowerCase('vi'), tag]));
-    const clean = (list) => [...new Set(list.map((t) => String(t).trim().slice(0, 50)).filter(Boolean).map((t) => {
+    // No commas: the filters pass tags as a comma-separated list.
+    const clean = (list) => [...new Set(list.map((t) => String(t).replace(/,/g, ' ').trim().slice(0, 50)).filter(Boolean).map((t) => {
       const key = t.toLocaleLowerCase('vi');
       if (!known.has(key)) known.set(key, t);
       return known.get(key);
@@ -882,6 +883,7 @@ export function registerRoutes(app) {
 
   // Which pages of a group posted which videos of a folder: posts per video × page.
   // folder '' = the whole default folder; group '' = all pages, NO_GROUP = pages without a group.
+  // `tags` (comma-separated) keeps pages having at least one of them.
   app.get('/api/videos/page-matrix', async (req) => {
     const folder = String(req.query.folder || '');
     const group = req.query.group || '';
@@ -889,11 +891,14 @@ export function registerRoutes(app) {
     const videos = videoFolders.files
       .filter((f) => !folder || f.folder === folder || f.folder.startsWith(`${folder}/`))
       .map(({ id, name, folder: path, size, durationMs, width, height }) => ({ id, name, folder: path, size, durationMs, width, height }));
+    const tagged = tagFilter(req.query.tags, 'id');
+    const tagWhere = tagged ? ` AND ${tagged.sql}` : '';
+    const tagArgs = tagged?.args || [];
     const pages = (group === NO_GROUP
-      ? db.prepare('SELECT id, name, group_name FROM pages WHERE group_name IS NULL ORDER BY name').all()
+      ? db.prepare(`SELECT id, name, group_name FROM pages WHERE group_name IS NULL${tagWhere} ORDER BY name`).all(...tagArgs)
       : group
-        ? db.prepare('SELECT id, name, group_name FROM pages WHERE group_name = ? ORDER BY name').all(group)
-        : db.prepare('SELECT id, name, group_name FROM pages ORDER BY name').all());
+        ? db.prepare(`SELECT id, name, group_name FROM pages WHERE group_name = ?${tagWhere} ORDER BY name`).all(group, ...tagArgs)
+        : db.prepare(`SELECT id, name, group_name FROM pages WHERE 1 = 1${tagWhere} ORDER BY name`).all(...tagArgs));
     if (!videos.length || !pages.length) return { videos, pages, cells: [] };
     const vMarks = videos.map(() => '?').join(',');
     const rows = db.prepare(`
@@ -1164,12 +1169,24 @@ export function registerRoutes(app) {
 
   // --- Reels & stats ---
   // Page / group filters shared by the reels list and the charts.
+  // SQL keeping pages that have at least one of the comma-separated `tags`; null without tags.
+  function tagFilter(tags, pageColumn) {
+    const list = String(tags || '').split(',').filter(Boolean);
+    if (!list.length) return null;
+    return {
+      sql: `${pageColumn} IN (SELECT page_id FROM page_tags WHERE tag IN (${list.map(() => '?').join(',')}))`,
+      args: list,
+    };
+  }
+
   function reelFilters(query) {
     const where = [];
     const args = [];
     if (query.pageId) { where.push('r.page_id = ?'); args.push(query.pageId); }
     if (query.group === NO_GROUP) where.push('p.group_name IS NULL');
     else if (query.group) { where.push('p.group_name = ?'); args.push(query.group); }
+    const tagged = tagFilter(query.tags, 'r.page_id');
+    if (tagged) { where.push(tagged.sql); args.push(...tagged.args); }
     return { where, args };
   }
 

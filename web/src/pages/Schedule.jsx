@@ -10,6 +10,7 @@ import dayjs from 'dayjs';
 import { api, fmtSize, fmtSec, groupColor, useApi } from '../api.js';
 import { checkCaption, renderCaption } from '../caption.js';
 import { takeSchedulePrefill } from '../prefill.js';
+import TagFilter from './TagFilter.jsx';
 import { Preview as HookPreview } from './Hooks.jsx';
 import LibraryBrowser, { filesOf } from './LibraryBrowser.jsx';
 
@@ -985,6 +986,15 @@ export default function Schedule() {
 
   // A group counts as selected when all of its pages are selected.
   const selectedGroups = Object.keys(groups).filter((g) => groups[g].every((id) => pageIds.includes(id)));
+  // Same for tags; a page in another tag still picked stays.
+  const tagPages = Map.groupBy(enabledPages.flatMap((p) => p.tags.map((t) => [t, p.id])), ([t]) => t);
+  const pagesOfTag = (t) => (tagPages.get(t) || []).map(([, id]) => id);
+  const selectedTags = [...tagPages.keys()].filter((t) => pagesOfTag(t).every((id) => pageIds.includes(id)));
+  const pickTags = (names) => {
+    const removed = selectedTags.filter((t) => !names.includes(t)).flatMap(pagesOfTag);
+    const added = names.flatMap(pagesOfTag);
+    form.setFieldValue('pageIds', [...new Set([...pageIds.filter((id) => !removed.includes(id)), ...added])]);
+  };
   const pickGroups = (names) => {
     const removed = selectedGroups.filter((g) => !names.includes(g)).flatMap((g) => groups[g]);
     const added = names.flatMap((g) => groups[g] || []);
@@ -1109,6 +1119,15 @@ export default function Schedule() {
                 tagRender={({ label, value, closable, onClose }) => (
                   <Tag color={groupColor(value)} closable={closable} onClose={onClose} style={{ marginInlineEnd: 4 }}>{label}</Tag>
                 )}
+              />
+            </Form.Item>
+            <Form.Item label="Chọn theo tag">
+              <TagFilter
+                pages={enabledPages}
+                placeholder="Chọn tag để thêm các page có tag đó"
+                disabled={!!dayCells}
+                value={selectedTags}
+                onChange={pickTags}
               />
             </Form.Item>
             <Form.Item

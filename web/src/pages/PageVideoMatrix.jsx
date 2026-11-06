@@ -9,6 +9,7 @@ import dayjs from 'dayjs';
 import { fmtNum, groupColor, useApi } from '../api.js';
 import { openScheduleWith } from '../prefill.js';
 import { createSelection } from '../selection.js';
+import TagFilter from './TagFilter.jsx';
 import VideoDrawer from './VideoDrawer.jsx';
 
 const NO_GROUP = '__none__';
@@ -103,11 +104,13 @@ export default function PageVideoMatrix() {
   const [sel] = useState(createSelection);
   const { data: folders = [] } = useApi('/video-folders');
   const { data: groups = [] } = useApi('/groups');
+  const { data: allPages = [] } = useApi('/pages');
   const [folder, setFolder] = useState('');
   const [group, setGroup] = useState('');
+  const [tags, setTags] = useState([]);
   const [postedOnly, setPostedOnly] = useState(false);
   const [sortBy, setSortBy] = useState('name');
-  const query = new URLSearchParams({ folder, group }).toString();
+  const query = new URLSearchParams({ folder, group, tags: tags.join(',') }).toString();
   const { data, loading } = useApi(`/videos/page-matrix?${query}`);
 
   const { rows, folderCols, videoTotals, videoUpcoming, folderTotals, grand } = useMemo(() => {
@@ -281,6 +284,8 @@ export default function PageVideoMatrix() {
         <Select style={{ width: 260 }} value={folder} onChange={setFolder} options={folderOptions} showSearch optionFilterProp="value" />
         <Typography.Text>Nhóm page:</Typography.Text>
         <Select style={{ width: 200 }} value={group} onChange={setGroup} options={groupOptions} />
+        <Typography.Text>Tag:</Typography.Text>
+        <TagFilter pages={allPages} value={tags} onChange={setTags} style={{ width: 200 }} />
         <Segmented
           value={sortBy}
           onChange={setSortBy}

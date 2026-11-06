@@ -8,6 +8,7 @@ import { groupColor, useApi } from '../api.js';
 import { openScheduleWith } from '../prefill.js';
 import { createSelection } from '../selection.js';
 import { STATUS } from '../status.js';
+import TagFilter from './TagFilter.jsx';
 
 const NO_GROUP = '__none__';
 const MAX_DAYS = 62;
@@ -92,6 +93,7 @@ export default function Calendar() {
   const [sel] = useState(createSelection);
   const [range, setRange] = useState(() => [dayjs().startOf('day'), dayjs().add(13, 'day').startOf('day')]);
   const [groupFilter, setGroupFilter] = useState('');
+  const [tagFilter, setTagFilter] = useState([]);
   const [onlyMissing, setOnlyMissing] = useState(false);
   const [showDisabled, setShowDisabled] = useState(false);
 
@@ -122,6 +124,7 @@ export default function Calendar() {
   const rows = pages
     .filter((p) => showDisabled || p.enabled)
     .filter((p) => !groupFilter || (p.group_name || NO_GROUP) === groupFilter)
+    .filter((p) => !tagFilter.length || tagFilter.some((t) => p.tags.includes(t)))
     .map((p) => {
       const cells = byPage.get(p.id) || {};
       const missing = days.filter((d) => !cells[d.format('YYYY-MM-DD')]).length;
@@ -225,6 +228,7 @@ export default function Calendar() {
             { value: NO_GROUP, label: 'Chưa có nhóm' },
           ]}
         />
+        <TagFilter pages={pages} value={tagFilter} onChange={setTagFilter} style={{ width: 200 }} />
         <Space size={4}><Switch size="small" checked={onlyMissing} onChange={setOnlyMissing} /> Chỉ page thiếu lịch</Space>
         <Space size={4}><Switch size="small" checked={showDisabled} onChange={setShowDisabled} /> Hiện page đang tắt</Space>
       </Space>

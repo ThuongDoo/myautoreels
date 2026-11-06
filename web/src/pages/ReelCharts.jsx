@@ -375,10 +375,12 @@ function PageGrowth({ query, M, unit, onOpenPage }) {
   const { rows, series } = useMemo(() => {
     const group = filters.get("group");
     const pageId = filters.get("pageId");
+    const tags = filters.get("tags")?.split(",");
     const map = new Map();
     for (const p of pages) {
       if (!p.enabled || (pageId && p.id !== pageId)) continue;
       if (group && (p.group_name || "__none__") !== group) continue;
+      if (tags && !tags.some((t) => p.tags.includes(t))) continue;
       map.set(p.id, { id: p.id, name: p.name, base: 0, prev: 0, cur: 0, later: 0 });
     }
     for (const b of baseline) {

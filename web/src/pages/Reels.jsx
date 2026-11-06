@@ -9,6 +9,7 @@ import { api, fmtNum, fmtSec, groupColor, useApi } from '../api.js';
 import ReelCharts from './ReelCharts.jsx';
 import VideoDrawer from './VideoDrawer.jsx';
 import PageDrawer from './PageDrawer.jsx';
+import TagFilter from './TagFilter.jsx';
 
 const viewsPerHour = (r) => r.views / Math.max(1, (Date.now() - r.published_at) / 3_600_000);
 
@@ -97,6 +98,7 @@ export default function Reels() {
   const [days, setDays] = useState('today');
   const [pageId, setPageId] = useState();
   const [group, setGroup] = useState();
+  const [tags, setTags] = useState([]);
   const [tab, setTab] = useState('charts');
   const [viralOnly, setViralOnly] = useState(false);
   const [q, setQ] = useState('');
@@ -117,6 +119,7 @@ export default function Reels() {
     ...(days === 'today' ? { from: period.from.valueOf() } : { days }),
     ...(pageId && { pageId }),
     ...(group && { group }),
+    ...(tags.length && { tags: tags.join(',') }),
   }).toString();
   const { data = [], loading, reload } = useApi(`/reels?${query}`, { refreshMs: 60_000 });
 
@@ -132,7 +135,8 @@ export default function Reels() {
 
   const needle = q.toLowerCase();
   const rows = data.filter((r) => (!viralOnly || r.viral) && (!needle || (r.caption || '').toLowerCase().includes(needle)));
-  const pageOptions = pages.filter((p) => !group || (group === '__none__' ? !p.group_name : p.group_name === group));
+  const pageOptions = pages.filter((p) => (!group || (group === '__none__' ? !p.group_name : p.group_name === group))
+    && (!tags.length || tags.some((t) => p.tags.includes(t))));
 
   const stats = [
     { title: 'Page đang bật', value: ov?.pages },
@@ -197,6 +201,7 @@ export default function Reels() {
               { value: '__none__', label: 'Chưa có nhóm' },
             ]}
           />
+          <TagFilter pages={pages} value={tags} onChange={(t) => { setTags(t); setPageId(undefined); }} style={{ width: 200 }} />
           <Select
             allowClear
             showSearch
