@@ -146,6 +146,19 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_video_notes_name ON video_notes(name);
 `);
 
+// Where video ideas come from. `folders`: JSON list of Drive folder paths, not ids, so they
+// still match after a folder is deleted and uploaded again.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS video_sources (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    url TEXT,
+    folders TEXT NOT NULL DEFAULT '[]',
+    created_at INTEGER,
+    updated_at INTEGER
+  );
+`);
+
 // 1 = page unpublished on Facebook, as last seen by the app (the page detail reads it live).
 if (!db.prepare('PRAGMA table_info(pages)').all().some((c) => c.name === 'fb_hidden')) {
   db.exec('ALTER TABLE pages ADD COLUMN fb_hidden INTEGER NOT NULL DEFAULT 0');

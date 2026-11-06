@@ -788,6 +788,44 @@ export function registerRoutes(app) {
     return [...count].map(([path, videos]) => ({ path, videos })).sort((a, b) => a.path.localeCompare(b.path, 'vi'));
   });
 
+  // --- Video sources: where video ideas come from ---
+  const sourceFields = (body) => {
+    const name = String(body?.name ?? '').trim().slice(0, 200);
+    if (!name) throw bad('Thiếu tên nguồn');
+    let url = String(body?.url ?? '').trim().slice(0, 1000);
+    if (url) {
+      // A pasted "tiktok.com/@abc" has no scheme; anything but http(s) must not become a link.
+      if (!/^[a-z][a-z0-9+.-]*:/i.test(url)) url = `https://${url}`;
+      if (!/^https?:\/\/[^\s/]+/i.test(url)) throw bad('Link không hợp lệ');
+    }
+    const folders = Array.isArray(body?.folders) ? [...new Set(body.folders.map(String).filter(Boolean))] : [];
+    return { name, url: url || null, folders: JSON.stringify(folders) };
+  };
+
+  app.get('/api/video-sources', async () => db.prepare('SELECT id, name, url, folders FROM video_sources ORDER BY name').all()
+    .map((s) => ({ ...s, folders: JSON.parse(s.folders) })));
+
+  app.post('/api/video-sources', async (req) => {
+    const { name, url, folders } = sourceFields(req.body);
+    const now = Date.now();
+    const { lastInsertRowid } = db.prepare('INSERT INTO video_sources (name, url, folders, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
+      .run(name, url, folders, now, now);
+    return { id: Number(lastInsertRowid) };
+  });
+
+  app.put('/api/video-sources/:id', async (req) => {
+    const { name, url, folders } = sourceFields(req.body);
+    const { changes } = db.prepare('UPDATE video_sources SET name = ?, url = ?, folders = ?, updated_at = ? WHERE id = ?')
+      .run(name, url, folders, Date.now(), Number(req.params.id));
+    if (!changes) throw bad('Không tìm thấy nguồn', 404);
+    return { ok: true };
+  });
+
+  app.delete('/api/video-sources/:id', async (req) => {
+    db.prepare('DELETE FROM video_sources WHERE id = ?').run(Number(req.params.id));
+    return { ok: true };
+  });
+
   // Which pages of a group posted which videos of a folder: posts per video × page.
   // folder '' = the whole default folder; group '' = all pages, NO_GROUP = pages without a group.
   app.get('/api/videos/page-matrix', async (req) => {
