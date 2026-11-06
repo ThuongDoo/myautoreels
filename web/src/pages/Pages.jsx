@@ -8,6 +8,9 @@ import {
 import { api, groupColor, useApi } from '../api.js';
 import AvatarBulkModal, { IMAGE_KINDS } from './AvatarBulk.jsx';
 import TaskProgressModal, { LOG_COLORS } from './TaskProgress.jsx';
+import PageDrawer from './PageDrawer.jsx';
+import { HistoryDrawer } from './Reels.jsx';
+import VideoDrawer from './VideoDrawer.jsx';
 import { GroupManagerModal, NewGroupInput } from './GroupControls.jsx';
 
 const NO_GROUP = '__none__';
@@ -27,6 +30,9 @@ export default function Pages() {
   const [groupPickerOpen, setGroupPickerOpen] = useState(false);
   const [showGroups, setShowGroups] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [openPage, setOpenPage] = useState(null);
+  const [openReel, setOpenReel] = useState(null);
+  const [openVideo, setOpenVideo] = useState(null);
 
   const sync = async () => {
     setSyncing(true);
@@ -200,11 +206,17 @@ export default function Pages() {
             title: 'Page',
             dataIndex: 'name',
             sorter: (a, b) => a.name.localeCompare(b.name),
-            // Opens the page on Facebook in a new tab.
+            // The name opens the page's detail; the arrow opens it on Facebook in a new tab.
             render: (name, p) => (
-              <a href={`https://www.facebook.com/${p.id}`} target="_blank" rel="noreferrer" title="Mở page trên Facebook (tab mới)">
-                <Space><Avatar src={p.picture} size="small" />{name}<ExportOutlined style={{ fontSize: 11, color: '#999' }} /></Space>
-              </a>
+              <Space>
+                <a onClick={() => setOpenPage(p.id)} title="Xem chi tiết page">
+                  <Space><Avatar src={p.picture} size="small" />{name}</Space>
+                </a>
+                <a href={`https://www.facebook.com/${p.id}`} target="_blank" rel="noreferrer" title="Mở page trên Facebook (tab mới)">
+                  <ExportOutlined style={{ fontSize: 11, color: '#999' }} />
+                </a>
+                {p.fb_hidden ? <Tag color="red" style={{ margin: 0 }}>Đã ẩn trên FB</Tag> : null}
+              </Space>
             ),
           },
           { title: 'ID', dataIndex: 'id', render: (id) => <Typography.Text copyable type="secondary">{id}</Typography.Text> },
@@ -287,6 +299,16 @@ export default function Pages() {
           onChanged={() => { setGroupFilter(''); reload({ silent: true }); reloadGroups({ silent: true }); }}
         />
       )}
+      {openPage && (
+        <PageDrawer
+          pageId={openPage}
+          onClose={() => setOpenPage(null)}
+          onOpenReel={setOpenReel}
+          onChanged={() => reload({ silent: true })}
+        />
+      )}
+      {openReel && <HistoryDrawer reel={openReel} onClose={() => setOpenReel(null)} onOpenVideo={setOpenVideo} />}
+      {openVideo && <VideoDrawer video={openVideo} onClose={() => setOpenVideo(null)} />}
     </Card>
   );
 }

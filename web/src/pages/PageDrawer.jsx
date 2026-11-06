@@ -1,6 +1,6 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
-  Avatar, Button, Card, Col, Descriptions, Drawer, Empty, List, Row, Statistic, Table, Tag, Typography,
+  Alert, Avatar, Button, Card, Col, Descriptions, Drawer, Empty, List, Row, Segmented, Space, Statistic, Table, Tag, Typography,
 } from 'antd';
 import { FireOutlined } from '@ant-design/icons';
 import { Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
@@ -17,13 +17,47 @@ const STATUS = {
 const compact = (v) => Intl.NumberFormat('vi-VN', { notation: 'compact' }).format(v);
 const pct = (v) => `${(v * 100).toFixed(1)}%`;
 
-// Detail of one page: totals for the chosen period (from `reels`, already filtered by the
-// parent), all-time numbers and the upcoming queue from the server, and the page's reels.
-export default function PageDrawer({ pageId, reels, periodLabel, onClose, onOpenReel }) {
+// Periods offered when the drawer loads the page's reels itself. 3650 = everything.
+const PERIODS = [
+  { value: 7, label: '7 ngày' },
+  { value: 30, label: '30 ngày' },
+  { value: 90, label: '90 ngày' },
+  { value: 3650, label: 'Tất cả' },
+];
+
+// Whether the page is public on Facebook, read live. `onChanged` fires once it is known, since
+// the server remembers it for the page list. Facebook's API can't change it on new-experience
+// Pages, so hiding a page is done on Facebook itself.
+function FacebookVisibility({ pageId, onChanged }) {
+  const { data, error, loading } = useApi(`/pages/${pageId}/fb-status`);
+  const published = data?.published;
+  useEffect(() => { if (published !== undefined) onChanged?.(); }, [published]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (error) return <Alert type="warning" showIcon style={{ marginBottom: 16 }} message={`Không đọc được trạng thái trên Facebook: ${error.message}`} />;
+  return (
+    <Space style={{ marginBottom: 16 }}>
+      <Typography.Text strong>Trên Facebook:</Typography.Text>
+      {published === undefined
+        ? <Typography.Text type="secondary">{loading ? 'đang kiểm tra...' : '-'}</Typography.Text>
+        : <Tag color={published ? 'green' : 'red'}>{published ? 'Đang hiện công khai' : 'Đã ẩn'}</Tag>}
+    </Space>
+  );
+}
+
+// Detail of one page: totals for a period, all-time numbers and the upcoming queue from the
+// server, and the page's reels. `reels` already filtered by the parent, or left out to load
+// the page's reels here with a period picker. `onChanged` fires once the Facebook status is read.
+export default function PageDrawer({
+  pageId, reels, periodLabel, onClose, onOpenReel, onChanged,
+}) {
   const { data: s } = useApi(`/pages/${pageId}/summary`);
+  const [days, setDays] = useState(30);
+  const { data: loaded = [], loading } = useApi(reels ? null : `/reels?days=${days}&pageId=${encodeURIComponent(pageId)}`);
+  const source = reels || loaded;
+  const label = periodLabel || (days === 3650 ? 'từ trước đến nay' : `${days} ngày qua`);
   const own = useMemo(
-    () => reels.filter((r) => r.page_id === pageId).sort((a, b) => a.published_at - b.published_at),
-    [reels, pageId],
+    () => source.filter((r) => r.page_id === pageId).sort((a, b) => a.published_at - b.published_at),
+    [source, pageId],
   );
 
   const stats = useMemo(() => {
@@ -59,7 +93,7 @@ export default function PageDrawer({ pageId, reels, periodLabel, onClose, onOpen
   return (
     <Drawer
       open
-      width={760}
+      width={920}
       onClose={onClose}
       title={(
         <Typography.Text>
@@ -69,6 +103,8 @@ export default function PageDrawer({ pageId, reels, periodLabel, onClose, onOpen
       )}
       extra={<Button type="link" href={`https://www.facebook.com/${pageId}`} target="_blank">Mở page →</Button>}
     >
+      <FacebookVisibility pageId={pageId} onChanged={onChanged} />
+
       <Descriptions size="small" column={2} style={{ marginBottom: 16 }}>
         <Descriptions.Item label="Nhóm">
           {page?.group_name ? <Tag color={groupColor(page.group_name)}>{page.group_name}</Tag> : 'Chưa có nhóm'}
@@ -90,7 +126,10 @@ export default function PageDrawer({ pageId, reels, periodLabel, onClose, onOpen
         </Descriptions.Item>
       </Descriptions>
 
-      <Typography.Title level={5}>{periodLabel.charAt(0).toUpperCase() + periodLabel.slice(1)}</Typography.Title>
+      <Space style={{ marginBottom: 8 }} wrap>
+        <Typography.Title level={5} style={{ margin: 0 }}>{label.charAt(0).toUpperCase() + label.slice(1)}</Typography.Title>
+        {!reels && <Segmented size="small" value={days} onChange={setDays} options={PERIODS} />}
+      </Space>
       <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
         {[
           { title: 'Số reel', value: fmtNum(own.length) },
@@ -149,6 +188,7 @@ export default function PageDrawer({ pageId, reels, periodLabel, onClose, onOpen
       <Table
         rowKey="video_id"
         size="small"
+        loading={!reels && loading}
         dataSource={own}
         pagination={{ pageSize: 20, showSizeChanger: false }}
         onRow={(r) => ({ onClick: () => onOpenReel(r), style: { cursor: 'pointer' } })}
@@ -177,6 +217,20 @@ export default function PageDrawer({ pageId, reels, periodLabel, onClose, onOpen
           { title: 'Cmt', dataIndex: 'comments', width: 60, align: 'right', render: fmtNum },
           { title: 'Share', dataIndex: 'shares', width: 65, align: 'right', render: fmtNum },
           { title: 'Xem TB', dataIndex: 'avg_watch_ms', width: 70, align: 'right', render: fmtSec },
+          {
+            title: 'Viral',
+            dataIndex: 'viral_score',
+            width: 70,
+            align: 'right',
+            sorter: (a, b) => (a.viral_score || 0) - (b.viral_score || 0),
+            render: (v, r) => (v == null ? '-' : <Tag color={r.viral ? 'volcano' : 'default'} style={{ margin: 0 }}>x{v.toFixed(1)}</Tag>),
+          },
+          {
+            title: '',
+            key: 'fb',
+            width: 50,
+            render: (_, r) => <a href={r.permalink} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>Mở</a>,
+          },
         ]}
       />
     </Drawer>

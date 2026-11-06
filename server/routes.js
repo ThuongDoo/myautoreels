@@ -136,7 +136,7 @@ export function registerRoutes(app) {
 
   // --- Pages ---
   app.get('/api/pages', async () => db.prepare(`
-    SELECT p.id, p.name, p.picture, p.enabled, p.group_name, p.synced_at, p.account_id, a.name AS account_name
+    SELECT p.id, p.name, p.picture, p.enabled, p.fb_hidden, p.group_name, p.synced_at, p.account_id, a.name AS account_name
     FROM pages p LEFT JOIN fb_accounts a ON a.id = p.account_id
     ORDER BY p.name
   `).all());
@@ -163,6 +163,23 @@ export function registerRoutes(app) {
       ORDER BY scheduled_at LIMIT 10
     `).all(page.id);
     return { page, totals, jobs, next };
+  });
+
+  // Publish state on Facebook: read live, and remembered so the page list can show it.
+  // Read only: Facebook rejects changing is_published on new-experience Pages (code 200/2069031).
+  const pageWithToken = (id) => {
+    const page = db.prepare('SELECT id, access_token FROM pages WHERE id = ?').get(id);
+    if (!page) throw bad('Không tìm thấy page', 404);
+    if (!page.access_token) throw bad('Page chưa có token, hãy đồng bộ lại');
+    return page;
+  };
+  const rememberPublished = (id, published) => db.prepare('UPDATE pages SET fb_hidden = ? WHERE id = ?').run(published ? 0 : 1, id);
+
+  app.get('/api/pages/:id/fb-status', async (req) => {
+    const page = pageWithToken(req.params.id);
+    const published = await fb.isPagePublished(page.id, page.access_token);
+    rememberPublished(page.id, published);
+    return { published };
   });
 
   // --- Facebook accounts (one per Business Manager) ---

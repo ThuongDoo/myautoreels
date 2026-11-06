@@ -134,6 +134,11 @@ if (!db.prepare('PRAGMA table_info(pages)').all().some((c) => c.name === 'accoun
   db.exec('ALTER TABLE pages ADD COLUMN account_id INTEGER');
 }
 
+// 1 = page unpublished on Facebook, as last seen by the app (the page detail reads it live).
+if (!db.prepare('PRAGMA table_info(pages)').all().some((c) => c.name === 'fb_hidden')) {
+  db.exec('ALTER TABLE pages ADD COLUMN fb_hidden INTEGER NOT NULL DEFAULT 0');
+}
+
 // Music picked at scheduling time and put into the video before upload.
 // audio_mode: 'replace' (music only) | 'mix' (original sound kept at orig_volume %).
 if (!db.prepare('PRAGMA table_info(jobs)').all().some((c) => c.name === 'music_file_id')) {

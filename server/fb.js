@@ -105,6 +105,11 @@ function imageForm(filePath, token) {
 }
 
 // The cover is an unpublished photo of the page set as its `cover`, without a post on the page's feed.
+// Whether the page is published, i.e. visible to people who don't manage it.
+export async function isPagePublished(pageId, token) {
+  return (await graph('GET', `/${pageId}`, { fields: 'is_published' }, token)).is_published !== false;
+}
+
 export async function setPageCover(pageId, token, filePath) {
   const form = imageForm(filePath, token);
   const photo = await request(new URL(`${graphBase()}/${pageId}/photos`), { method: 'POST', body: form({ published: 'false' }) });
