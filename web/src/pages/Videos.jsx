@@ -1,5 +1,6 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
+  App,
   Card,
   Input,
   Segmented,
@@ -13,7 +14,7 @@ import {
   FireOutlined, FolderOutlined,
 } from "@ant-design/icons";
 import dayjs from "dayjs";
-import { fmtNum, useApi } from "../api.js";
+import { api, fmtNum, useApi } from "../api.js";
 import VideoDrawer from "./VideoDrawer.jsx";
 
 // Scheduled videos the server couldn't find under the default Drive folder (moved, deleted,
@@ -42,6 +43,42 @@ function FolderName({ name }) {
       <FolderOutlined style={{ color: "#f5a623" }} />
       {name}
     </Space>
+  );
+}
+
+// Note typed straight into the table; saved when leaving the box or pressing Enter.
+function VideoNote({ video }) {
+  const { message } = App.useApp();
+  const [text, setText] = useState(video.note || "");
+  const [saved, setSaved] = useState(video.note || "");
+  useEffect(() => {
+    setText(video.note || "");
+    setSaved(video.note || "");
+  }, [video.note]);
+
+  const save = async () => {
+    const note = text.trim();
+    if (note === saved) return;
+    try {
+      await api.post("/videos/note", { id: video.id, name: video.name, note });
+      setSaved(note);
+    } catch (e) {
+      message.error(e.message);
+    }
+  };
+
+  return (
+    <Input
+      size="small"
+      variant="borderless"
+      placeholder="Thêm ghi chú..."
+      maxLength={500}
+      title={text}
+      value={text}
+      onChange={(e) => setText(e.target.value)}
+      onBlur={save}
+      onPressEnter={(e) => e.target.blur()}
+    />
   );
 }
 
@@ -79,7 +116,7 @@ export default function Videos() {
     (v) =>
       FILTERS[filter].test(v) &&
       (!folderFilter || folderKey(v) === folderFilter) &&
-      (!needle || (v.name || "").toLowerCase().includes(needle)),
+      (!needle || `${v.name || ""} ${v.note || ""}`.toLowerCase().includes(needle)),
   );
 
   return (
@@ -175,7 +212,7 @@ export default function Videos() {
             }))}
           />
           <Input.Search
-            placeholder="Tìm tên video..."
+            placeholder="Tìm tên video, ghi chú..."
             allowClear
             onChange={(e) => setQ(e.target.value)}
             style={{ width: 240 }}
@@ -187,7 +224,7 @@ export default function Videos() {
           loading={loading}
           dataSource={rows}
           pagination={{ pageSize: 50, showSizeChanger: false }}
-          scroll={{ x: 1130 }}
+          scroll={{ x: 1350 }}
           onRow={(v) => ({
             onClick: () => setOpen(v),
             style: { cursor: "pointer" },
@@ -208,6 +245,15 @@ export default function Videos() {
                   <a>{n || v.id}</a>
                 </Space>
               ),
+            },
+            {
+              title: "Ghi chú",
+              dataIndex: "note",
+              width: 220,
+              sorter: (a, b) => (a.note || "").localeCompare(b.note || "", "vi"),
+              // Typing here must not open the video drawer.
+              onCell: () => ({ onClick: (e) => e.stopPropagation() }),
+              render: (_, v) => <VideoNote video={v} />,
             },
             {
               title: "Thư mục",

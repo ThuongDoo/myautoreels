@@ -10,6 +10,9 @@ import VideoDrawer from './VideoDrawer.jsx';
 
 const EDITABLE = ['pending', 'uploaded', 'failed', 'canceled'];
 const NO_GROUP = '__none__';
+const byText = (key) => (a, b) => (a[key] || '').localeCompare(b[key] || '', 'vi', { numeric: true });
+// Statuses sort in the order a job goes through them.
+const STATUS_ORDER = Object.keys(STATUS);
 
 function EditModal({ job, onClose, onSaved }) {
   const { message } = App.useApp();
@@ -143,6 +146,7 @@ export default function Queue() {
             dataIndex: 'page_name',
             width: 220,
             ellipsis: true,
+            sorter: byText('page_name'),
             render: (n, j) => (
               <Space size={4}>
                 <Typography.Text ellipsis style={{ maxWidth: 130 }}>{n}</Typography.Text>
@@ -155,6 +159,7 @@ export default function Queue() {
             dataIndex: 'drive_file_name',
             width: 200,
             ellipsis: true,
+            sorter: byText('drive_file_name'),
             render: (n, j) => (
               <>
                 <a onClick={() => setOpenVideo({ id: j.drive_file_id, name: n })}>{n}</a>
@@ -177,12 +182,14 @@ export default function Queue() {
             title: 'Caption',
             dataIndex: 'caption',
             ellipsis: { showTitle: false },
+            sorter: byText('caption'),
             render: (c) => <Tooltip title={c} placement="topLeft">{c}</Tooltip>,
           },
           {
             title: 'Trạng thái',
             dataIndex: 'status',
             width: 170,
+            sorter: (a, b) => STATUS_ORDER.indexOf(a.status) - STATUS_ORDER.indexOf(b.status),
             render: (s, j) => {
               const tag = <Tag color={STATUS[s]?.color}>{STATUS[s]?.label || s}</Tag>;
               if (s === 'done' && j.video_id) return <a href={`https://www.facebook.com/reel/${j.video_id}`} target="_blank" rel="noreferrer">{tag}</a>;

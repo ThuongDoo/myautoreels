@@ -134,6 +134,18 @@ if (!db.prepare('PRAGMA table_info(pages)').all().some((c) => c.name === 'accoun
   db.exec('ALTER TABLE pages ADD COLUMN account_id INTEGER');
 }
 
+// Free-text note per source video. The name is kept so a note survives uploading the file
+// to Drive again, which gives it a new id.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS video_notes (
+    drive_file_id TEXT PRIMARY KEY,
+    name TEXT,
+    note TEXT NOT NULL,
+    updated_at INTEGER
+  );
+  CREATE INDEX IF NOT EXISTS idx_video_notes_name ON video_notes(name);
+`);
+
 // 1 = page unpublished on Facebook, as last seen by the app (the page detail reads it live).
 if (!db.prepare('PRAGMA table_info(pages)').all().some((c) => c.name === 'fb_hidden')) {
   db.exec('ALTER TABLE pages ADD COLUMN fb_hidden INTEGER NOT NULL DEFAULT 0');

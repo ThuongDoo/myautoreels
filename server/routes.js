@@ -750,7 +750,28 @@ export function registerRoutes(app) {
       id: f.id, name: f.name, folder: folderName(f), posted: 0, upcoming: 0, failed: 0, pages: 0,
       first_posted: null, last_posted: null, views: 0, interactions: 0, best_views: 0, viral: 0,
     }));
-    return [...byFile.values(), ...unused, ...lost];
+    const notes = db.prepare('SELECT drive_file_id AS id, name, note FROM video_notes').all();
+    const noteById = new Map(notes.map((n) => [n.id, n.note]));
+    const noteByName = new Map(notes.map((n) => [n.name, n.note]));
+    return [...byFile.values(), ...unused, ...lost].map((v) => ({
+      ...v, note: noteById.get(v.id) ?? noteByName.get(v.name) ?? '',
+    }));
+  });
+
+  // Saves a video's note; an empty note removes it. Older rows of the same file name go too,
+  // so a note from before a re-upload can't come back.
+  app.post('/api/videos/note', async (req) => {
+    const { id, name } = req.body || {};
+    const note = String(req.body?.note ?? '').trim().slice(0, 500);
+    if (!id) throw bad('Thiếu video');
+    transaction(() => {
+      db.prepare('DELETE FROM video_notes WHERE drive_file_id = ? OR name = ?').run(id, name ?? null);
+      if (note) {
+        db.prepare('INSERT INTO video_notes (drive_file_id, name, note, updated_at) VALUES (?, ?, ?, ?)')
+          .run(id, name ?? null, note, Date.now());
+      }
+    });
+    return { note };
   });
 
   // Folder paths under the default video folder with how many videos each holds (subfolders included).
