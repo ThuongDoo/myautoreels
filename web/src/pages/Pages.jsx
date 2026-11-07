@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react';
 import {
-  App, Avatar, Button, Card, Divider, Dropdown, Input, Popconfirm, Select, Space, Switch, Table, Tag, Typography,
+  App, Avatar, Button, Card, Divider, Dropdown, Input, Popconfirm, Select, Space, Switch, Table, Tag, Tooltip, Typography,
 } from 'antd';
 import {
   DownOutlined, ExportOutlined, PictureOutlined, SettingOutlined, SyncOutlined,
 } from '@ant-design/icons';
-import { api, groupColor, useApi } from '../api.js';
+import { api, fmtNum, groupColor, useApi } from '../api.js';
 import AvatarBulkModal, { IMAGE_KINDS } from './AvatarBulk.jsx';
 import TaskProgressModal, { LOG_COLORS } from './TaskProgress.jsx';
 import PageDrawer from './PageDrawer.jsx';
@@ -118,6 +118,12 @@ export default function Pages() {
   const renderTag = ({ value, closable, onClose }) => (
     <Tag color={groupColor(value)} closable={closable} onClose={onClose} style={{ marginInlineEnd: 4 }}>{value}</Tag>
   );
+
+  // Tag order: by the tags' names, pages without a tag always at the bottom.
+  const sortByTags = (a, b, order) => {
+    if (!a.tags.length !== !b.tags.length) return (a.tags.length ? -1 : 1) * (order === 'descend' ? -1 : 1);
+    return a.tags.join(', ').localeCompare(b.tags.join(', '), 'vi', { numeric: true });
+  };
 
   const needle = q.toLowerCase();
   const rows = data.filter((p) => (!groupFilter || (p.group_name || NO_GROUP) === groupFilter)
@@ -297,6 +303,7 @@ export default function Pages() {
             title: 'Tag',
             dataIndex: 'tags',
             width: 260,
+            sorter: sortByTags,
             render: (tags, p) => (
               <Select
                 mode="tags"
@@ -311,6 +318,15 @@ export default function Pages() {
                 onChange={(next) => changeTags([p.id], next.filter((t) => !tags.includes(t)), tags.filter((t) => !next.includes(t)))}
               />
             ),
+          },
+          {
+            title: <Tooltip title="Tổng view các reel của page mà app đang theo dõi (lấy từ trang Thống kê)">Tổng view</Tooltip>,
+            dataIndex: 'views',
+            width: 120,
+            align: 'right',
+            sorter: (a, b) => a.views - b.views,
+            sortDirections: ['descend', 'ascend'],
+            render: (v, p) => <Tooltip title={`${p.reels} reel`}>{fmtNum(v)}</Tooltip>,
           },
           ...(accounts.length > 1 ? [{
             title: 'BM',

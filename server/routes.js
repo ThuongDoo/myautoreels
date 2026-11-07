@@ -138,8 +138,10 @@ export function registerRoutes(app) {
   app.get('/api/pages', async () => {
     const tags = Map.groupBy(db.prepare('SELECT page_id, tag FROM page_tags ORDER BY tag').all(), (t) => t.page_id);
     return db.prepare(`
-      SELECT p.id, p.name, p.picture, p.enabled, p.fb_hidden, p.group_name, p.synced_at, p.account_id, a.name AS account_name
+      SELECT p.id, p.name, p.picture, p.enabled, p.fb_hidden, p.group_name, p.synced_at, p.account_id, a.name AS account_name,
+             COALESCE(r.views, 0) AS views, COALESCE(r.reels, 0) AS reels
       FROM pages p LEFT JOIN fb_accounts a ON a.id = p.account_id
+      LEFT JOIN (SELECT page_id, SUM(views) AS views, COUNT(*) AS reels FROM reels GROUP BY page_id) r ON r.page_id = p.id
       ORDER BY p.name
     `).all().map((p) => ({ ...p, tags: (tags.get(p.id) || []).map((t) => t.tag) }));
   });
