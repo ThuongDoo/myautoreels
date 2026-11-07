@@ -12,6 +12,7 @@ import PageDrawer from './PageDrawer.jsx';
 import { HistoryDrawer } from './Reels.jsx';
 import VideoDrawer from './VideoDrawer.jsx';
 import { GroupManagerModal, NewGroupInput } from './GroupControls.jsx';
+import TagFilter from './TagFilter.jsx';
 
 const NO_GROUP = '__none__';
 
@@ -184,24 +185,9 @@ export default function Pages() {
         <Button size="small" icon={<SettingOutlined />} onClick={() => setShowGroups(true)}>Tạo / quản lý nhóm</Button>
       </Space>
 
-      {tagCounts.length > 0 && (
-        <Space wrap size={[6, 8]} style={{ marginBottom: 12, display: 'flex' }}>
-          <Typography.Text type="secondary">Tag:</Typography.Text>
-          {tagCounts.map(([t, n]) => (
-            <Tag.CheckableTag
-              key={t}
-              checked={tagFilter.includes(t)}
-              onChange={(on) => setTagFilter((cur) => (on ? [...cur, t] : cur.filter((x) => x !== t)))}
-            >
-              {t} ({n})
-            </Tag.CheckableTag>
-          ))}
-          {tagFilter.length > 0 && <Button size="small" type="link" onClick={() => setTagFilter([])}>Bỏ lọc tag</Button>}
-        </Space>
-      )}
-
       <Space wrap style={{ marginBottom: 16 }}>
         <Input.Search placeholder="Tìm tên, ID, nhóm, tag..." allowClear onChange={(e) => setQ(e.target.value)} style={{ width: 260 }} />
+        <TagFilter pages={data} value={tagFilter} onChange={setTagFilter} placeholder="Lọc theo tag" style={{ width: 220 }} />
         {selected.length > 0 ? (
           <>
             <Typography.Text strong>Đã chọn {selected.length} page:</Typography.Text>
