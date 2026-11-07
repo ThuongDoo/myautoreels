@@ -1257,7 +1257,8 @@ export function registerRoutes(app) {
   });
 
   // Views (`gain`) and likes / comments / shares gained per hour (UTC hour buckets; the browser groups them into local days).
-  // Gain = difference between consecutive stat snapshots; a reel's first snapshot is
+  // Gain = views above the reel's highest earlier snapshot, so a wrong low reading can't count
+  // the views again when the number comes back; a reel's first snapshot is
   // credited to its publish hour, since those views came in between publish and first fetch.
   // One row per hour × page so the chart can show which pages the views came from.
   // `from`/`to` (ms) pick an exact window instead of the last `days` days.
@@ -1270,7 +1271,7 @@ export function registerRoutes(app) {
       WITH s AS (
         SELECT rs.ts, rs.views, COALESCE(rs.likes, 0) AS likes, COALESCE(rs.comments, 0) AS comments,
                COALESCE(rs.shares, 0) AS shares, r.published_at, r.page_id, p.name AS page_name, p.group_name,
-               LAG(rs.views) OVER w AS prev,
+               MAX(rs.views) OVER (w ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) AS prev,
                LAG(COALESCE(rs.likes, 0)) OVER w AS prev_likes,
                LAG(COALESCE(rs.comments, 0)) OVER w AS prev_comments,
                LAG(COALESCE(rs.shares, 0)) OVER w AS prev_shares
@@ -1309,7 +1310,7 @@ export function registerRoutes(app) {
   });
 
   app.get('/api/reels/:id/history', async (req) =>
-    db.prepare('SELECT ts, views, likes, comments, shares FROM reel_stats WHERE video_id = ? ORDER BY ts').all(req.params.id));
+    db.prepare('SELECT ts, MAX(views) OVER (ORDER BY ts) AS views, likes, comments, shares FROM reel_stats WHERE video_id = ? ORDER BY ts').all(req.params.id));
 
   app.post('/api/stats/refresh', async () => {
     const started = !isStatsRunning();

@@ -52,9 +52,12 @@ async function refreshPage(page, since) {
       job_id = COALESCE(reels.job_id, excluded.job_id)
   `);
   const update = db.prepare(`
-    UPDATE reels SET views = ?, reach = ?, likes = ?, comments = ?, shares = ?, avg_watch_ms = ?, stats_at = ? WHERE video_id = ?
+    UPDATE reels SET views = MAX(views, COALESCE(?, 0)), reach = ?, likes = ?, comments = ?, shares = ?, avg_watch_ms = ?, stats_at = ? WHERE video_id = ?
   `);
-  const history = db.prepare('INSERT INTO reel_stats (video_id, ts, views, likes, comments, shares) VALUES (?, ?, ?, ?, ?, ?)');
+  const history = db.prepare(`
+    INSERT INTO reel_stats (video_id, ts, views, likes, comments, shares)
+    SELECT video_id, ?, views, ?, ?, ? FROM reels WHERE video_id = ?
+  `);
   const now = Date.now();
   transaction(() => {
     for (const r of list) {
@@ -62,7 +65,7 @@ async function refreshPage(page, since) {
       const s = r.stats;
       if (!s) continue;
       update.run(s.views, s.reach, s.likes, s.comments, s.shares, s.avg_watch_ms, now, r.id);
-      history.run(r.id, now, s.views, s.likes, s.comments, s.shares);
+      history.run(now, s.likes, s.comments, s.shares, r.id);
     }
   });
   computeViral(page);

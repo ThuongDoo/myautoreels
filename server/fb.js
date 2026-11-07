@@ -190,7 +190,7 @@ export async function getVideoSource(videoId, token) {
 // Fetched as nested fields of the reel list, so one call per page returns every reel's
 // numbers (instead of 2 calls per reel) — keeps us well under the app's hourly call limit.
 const METRICS = ['blue_reels_play_count', 'fb_reels_total_plays', 'post_video_avg_time_watched', 'post_video_social_actions'];
-const BASE_FIELDS = 'id,description,created_time,permalink_url,likes.summary(true).limit(0),comments.summary(true).limit(0)';
+const BASE_FIELDS = 'id,description,created_time,permalink_url,views,likes.summary(true).limit(0),comments.summary(true).limit(0)';
 
 const num = (v) => (typeof v === 'number' ? v : Number(v) || 0);
 
@@ -199,8 +199,11 @@ function reelStats(r) {
   const metric = (name) => insights.find((d) => d.name === name)?.values?.[0]?.value;
   const social = metric('post_video_social_actions') || {};
   const socialGet = (key) => num(Object.entries(social).find(([k]) => k.toLowerCase() === key)?.[1]);
+  // Facebook can stop returning both play metrics for a reel that is still being watched; its
+  // `views` field stays. null = no count at all, which must not read as 0 views.
+  const views = metric('blue_reels_play_count') ?? metric('fb_reels_total_plays') ?? r.views;
   return {
-    views: num(metric('blue_reels_play_count') ?? metric('fb_reels_total_plays')),
+    views: views == null ? null : num(views),
     reach: 0,
     avg_watch_ms: num(metric('post_video_avg_time_watched')),
     likes: num(r.likes?.summary?.total_count),
