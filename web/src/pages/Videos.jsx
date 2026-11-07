@@ -15,6 +15,7 @@ import {
 } from "@ant-design/icons";
 import dayjs from "dayjs";
 import { api, fmtNum, useApi } from "../api.js";
+import { checkCaption } from "../caption.js";
 import VideoDrawer from "./VideoDrawer.jsx";
 
 // Scheduled videos the server couldn't find under the default Drive folder (moved, deleted,
@@ -82,8 +83,48 @@ function VideoNote({ video }) {
   );
 }
 
+// Caption typed straight into the table, several lines allowed; saved when leaving the box.
+function VideoCaption({ video, onSaved }) {
+  const { message } = App.useApp();
+  const [text, setText] = useState(video.caption || "");
+  const [saved, setSaved] = useState(video.caption || "");
+  useEffect(() => {
+    setText(video.caption || "");
+    setSaved(video.caption || "");
+  }, [video.caption]);
+
+  const save = async () => {
+    const caption = text.trim();
+    if (caption === saved) return;
+    try {
+      await api.post("/videos/caption", { id: video.id, name: video.name, caption });
+      setSaved(caption);
+      onSaved();
+    } catch (e) {
+      message.error(e.message);
+    }
+  };
+
+  const problems = checkCaption(text);
+  return (
+    <Tooltip title={problems[0]}>
+      <Input.TextArea
+        size="small"
+        variant="borderless"
+        placeholder="Thêm caption..."
+        autoSize={{ minRows: 1, maxRows: 4 }}
+        maxLength={5000}
+        status={problems.length ? "error" : undefined}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onBlur={save}
+      />
+    </Tooltip>
+  );
+}
+
 export default function Videos() {
-  const { data = [], loading } = useApi("/videos", { refreshMs: 60_000 });
+  const { data = [], loading, reload } = useApi("/videos", { refreshMs: 60_000 });
   const [filter, setFilter] = useState("all");
   const [folderFilter, setFolderFilter] = useState("");
   const [q, setQ] = useState("");
@@ -116,7 +157,7 @@ export default function Videos() {
     (v) =>
       FILTERS[filter].test(v) &&
       (!folderFilter || folderKey(v) === folderFilter) &&
-      (!needle || `${v.name || ""} ${v.note || ""}`.toLowerCase().includes(needle)),
+      (!needle || `${v.name || ""} ${v.note || ""} ${v.caption || ""}`.toLowerCase().includes(needle)),
   );
 
   return (
@@ -212,10 +253,10 @@ export default function Videos() {
             }))}
           />
           <Input.Search
-            placeholder="Tìm tên video, ghi chú..."
+            placeholder="Tìm tên video, ghi chú, caption..."
             allowClear
             onChange={(e) => setQ(e.target.value)}
-            style={{ width: 240 }}
+            style={{ width: 280 }}
           />
         </Space>
         <Table
@@ -224,7 +265,7 @@ export default function Videos() {
           loading={loading}
           dataSource={rows}
           pagination={{ pageSize: 50, showSizeChanger: false }}
-          scroll={{ x: 1350 }}
+          scroll={{ x: 1650 }}
           onRow={(v) => ({
             onClick: () => setOpen(v),
             style: { cursor: "pointer" },
@@ -254,6 +295,15 @@ export default function Videos() {
               // Typing here must not open the video drawer.
               onCell: () => ({ onClick: (e) => e.stopPropagation() }),
               render: (_, v) => <VideoNote video={v} />,
+            },
+            {
+              title: <Tooltip title="Dùng khi lên lịch với caption lấy theo video. Viết được {filename}, {page} và {A|B} như ô Caption ở trang Lên lịch.">Caption</Tooltip>,
+              dataIndex: "caption",
+              width: 300,
+              sorter: (a, b) => (a.caption || "").localeCompare(b.caption || "", "vi"),
+              // Typing here must not open the video drawer.
+              onCell: () => ({ onClick: (e) => e.stopPropagation() }),
+              render: (_, v) => <VideoCaption video={v} onSaved={() => reload({ silent: true })} />,
             },
             {
               title: "Thư mục",

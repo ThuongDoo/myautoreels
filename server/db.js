@@ -146,6 +146,16 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_video_notes_name ON video_notes(name);
 `);
 
+// Caption written for one source video; same syntax as the schedule form's caption.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS video_captions (
+    drive_file_id TEXT PRIMARY KEY,
+    name TEXT,
+    caption TEXT NOT NULL,
+    updated_at INTEGER
+  );
+`);
+
 // Free tags on pages. A page has at most one group, but any number of tags.
 db.exec(`
   CREATE TABLE IF NOT EXISTS page_tags (

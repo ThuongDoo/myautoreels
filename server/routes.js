@@ -781,6 +781,20 @@ export function registerRoutes(app) {
     return { videos, music, hooks };
   });
 
+  // Captions by Drive id, plus by name for rows whose file left Drive, so a caption follows a
+  // re-upload (new id) but two live files sharing a name never get each other's caption.
+  // No name matching without a Drive listing: every row would look gone.
+  async function videoCaptions() {
+    await videoFolderMap();
+    const live = new Set(videoFolders.files.map((f) => f.id));
+    const rows = db.prepare('SELECT drive_file_id AS id, name, caption FROM video_captions ORDER BY updated_at').all();
+    return {
+      byId: Object.fromEntries(rows.map((r) => [r.id, r.caption])),
+      byName: Object.fromEntries(live.size ? rows.filter((r) => r.name && !live.has(r.id)).map((r) => [r.name, r.caption]) : []),
+    };
+  }
+  const captionOf = ({ byId, byName }, video) => byId[video.id] ?? byName[video.name] ?? '';
+
   const SUMMED = ['posted', 'upcoming', 'failed', 'views', 'interactions', 'viral'];
   app.get('/api/videos', async () => {
     const rows = videoRows.all();
@@ -808,9 +822,34 @@ export function registerRoutes(app) {
     const notes = db.prepare('SELECT drive_file_id AS id, name, note FROM video_notes').all();
     const noteById = new Map(notes.map((n) => [n.id, n.note]));
     const noteByName = new Map(notes.map((n) => [n.name, n.note]));
+    const captions = await videoCaptions();
     return [...byFile.values(), ...unused, ...lost].map((v) => ({
-      ...v, note: noteById.get(v.id) ?? noteByName.get(v.name) ?? '',
+      ...v, note: noteById.get(v.id) ?? noteByName.get(v.name) ?? '', caption: captionOf(captions, v),
     }));
+  });
+
+  app.get('/api/videos/captions', async () => videoCaptions());
+
+  // Saves a video's caption; an empty one removes it. Rows of the same name whose file left
+  // Drive go too, so a caption from before a re-upload can't come back.
+  app.post('/api/videos/caption', async (req) => {
+    const { id, name } = req.body || {};
+    const caption = String(req.body?.caption ?? '').trim().slice(0, 5000);
+    if (!id) throw bad('Thiếu video');
+    await videoFolderMap();
+    const live = new Set(videoFolders.files.map((f) => f.id));
+    const gone = db.prepare('SELECT drive_file_id AS id FROM video_captions WHERE name = ?').all(name ?? null)
+      .filter((r) => !live.has(r.id));
+    transaction(() => {
+      const del = db.prepare('DELETE FROM video_captions WHERE drive_file_id = ?');
+      del.run(id);
+      for (const r of gone) del.run(r.id);
+      if (caption) {
+        db.prepare('INSERT INTO video_captions (drive_file_id, name, caption, updated_at) VALUES (?, ?, ?, ?)')
+          .run(id, name ?? null, caption, Date.now());
+      }
+    });
+    return { caption };
   });
 
   // Saves a video's note; an empty note removes it. Older rows of the same file name go too,
@@ -1004,6 +1043,9 @@ export function registerRoutes(app) {
   app.post('/api/jobs/bulk', async (req) => {
     const {
       videos = [], pageIds = [], mode = 'all', slotTimes = [], gapMinSec = 30, gapMaxSec = 120, shuffle = false, captionTemplate = '',
+      // captionSource: 'custom' (captionTemplate for all) | 'video' (each video's own caption,
+      // captionTemplate for videos without one).
+      captionSource = 'custom',
       // audioMode: 'keep' (video as is) | 'replace' | 'mix'. musicFileIds: music to pick from ([] = all).
       audioMode = 'keep', musicPick = 'random', musicFileId, musicFileIds = [], origVolume = 30,
       // hookMode: 'none' | 'random' (a random enabled hook from hookFileIds, [] = all, before each video).
@@ -1086,6 +1128,7 @@ export function registerRoutes(app) {
       if (!MUSIC_PICKS.includes(musicPick)) throw bad('Cách chọn nhạc không hợp lệ');
       if (musicPick === 'one' && !musicFileId) throw bad('Chưa chọn bài nhạc');
     }
+    if (!['custom', 'video'].includes(captionSource)) throw bad('Kiểu caption không hợp lệ');
     if (!['none', 'random'].includes(hookMode)) throw bad('Kiểu ghép hook không hợp lệ');
     if (!['tail', 'own'].includes(hookVisual)) throw bad('Kiểu hình của hook không hợp lệ');
 
@@ -1119,6 +1162,7 @@ export function registerRoutes(app) {
       }
     }
     const volume = Math.min(100, Math.max(0, Math.round(Number(origVolume) || 0)));
+    const captions = captionSource === 'video' ? await videoCaptions() : null;
 
     const now = Date.now();
     const insert = db.prepare(`
@@ -1128,7 +1172,8 @@ export function registerRoutes(app) {
     `);
     transaction(() => {
       for (const { page, video, at, music, hook } of plan) {
-        const caption = renderCaption(captionTemplate, { filename: video.name.replace(/\.[^.]+$/, ''), page: page.name });
+        const template = (captions && captionOf(captions, video)) || captionTemplate;
+        const caption = renderCaption(template, { filename: video.name.replace(/\.[^.]+$/, ''), page: page.name });
         insert.run(page.id, video.id, video.name, caption, at, now, now,
           music?.id ?? null, music?.name ?? null, music ? audioMode : null, music && audioMode === 'mix' ? volume : null,
           hook?.id ?? null, hook?.name ?? null, hook ? hookVisual : null);

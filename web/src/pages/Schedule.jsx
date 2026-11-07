@@ -187,7 +187,7 @@ function CaptionTemplates({ template, onPick }) {
 
 // Form fields a saved schedule config keeps. Videos and start dates change every time, so they're left out.
 const PRESET_FIELDS = [
-  'pageIds', 'skipUsed', 'mode', 'shuffle', 'timing', 'slots', 'intervalMinutes', 'gapMinSec', 'gapMaxSec', 'captionTemplate',
+  'pageIds', 'skipUsed', 'mode', 'shuffle', 'timing', 'slots', 'intervalMinutes', 'gapMinSec', 'gapMaxSec', 'captionSource', 'captionTemplate',
   'hookMode', 'hookVisual', 'hookKeys', 'audioMode', 'musicPick', 'musicFileId', 'musicKeys', 'origVolume',
 ];
 const PRESET_KEY = 'autoreels.schedulePreset';
@@ -960,6 +960,14 @@ export default function Schedule() {
     }
   };
 
+  const { data: videoCaptions } = useApi('/videos/captions');
+  const captionOf = (v) => videoCaptions?.byId[v.id] ?? videoCaptions?.byName[v.name] ?? '';
+  const captionFromVideo = values.captionSource === 'video';
+  const noCaption = captionFromVideo ? videos.filter((v) => !captionOf(v)) : videos;
+  const badCaption = captionFromVideo ? videos.find((v) => checkCaption(captionOf(v)).length) : null;
+  // The box is only needed by videos without their own caption.
+  const showCaptionBox = !captionFromVideo || !videos.length || noCaption.length > 0;
+
   const pageIds = values.pageIds || [];
   const V = videos.length;
   const P = pageIds.length;
@@ -1009,7 +1017,8 @@ export default function Schedule() {
       return message.warning(`Có page chỉ còn ${cellPlan.fewest} khung giờ trong các ô đã chọn, nhưng cần ${perPage}. Hãy thêm khung giờ, giảm video hoặc chọn thêm ô.`);
     }
     if (slotTimes.length < perPage) return message.warning('Chưa có khung giờ / giờ bắt đầu');
-    if (checkCaption(v.captionTemplate).length) return message.error('Caption đang có lỗi, xem ngay dưới ô Caption');
+    if (badCaption) return message.error(`Caption của video "${badCaption.name}" đang có lỗi, sửa ở Kho video`);
+    if (showCaptionBox && checkCaption(v.captionTemplate).length) return message.error('Caption đang có lỗi, xem ngay dưới ô Caption');
     setSubmitting(true);
     try {
       const r = await api.post('/jobs/bulk', {
@@ -1023,6 +1032,7 @@ export default function Schedule() {
         pageSlots: cellPlan?.pageSlots,
         gapMinSec: v.gapMinSec,
         gapMaxSec: v.gapMaxSec,
+        captionSource: v.captionSource,
         captionTemplate: v.captionTemplate,
         audioMode: v.audioMode,
         musicPick: v.musicPick,
@@ -1071,6 +1081,7 @@ export default function Schedule() {
         intervalMinutes: 60,
         gapMinSec: 30,
         gapMaxSec: 120,
+        captionSource: 'custom',
         captionTemplate: '{filename}',
         pageIds: [],
         audioMode: 'keep',
@@ -1271,22 +1282,49 @@ export default function Schedule() {
               </Space.Compact>
             </Form.Item>
 
-            <CaptionTemplates
-              template={values.captionTemplate}
-              onPick={(t) => form.setFieldValue('captionTemplate', t)}
-            />
-            <Form.Item label="Caption" name="captionTemplate" style={{ marginBottom: 8 }}>
+            <Form.Item label="Caption" name="captionSource" style={{ marginBottom: 8 }}>
+              <Radio.Group optionType="button" buttonStyle="solid">
+                <Radio value="custom">Tự nhập</Radio>
+                <Radio value="video">Lấy theo video</Radio>
+              </Radio.Group>
+            </Form.Item>
+            {captionFromVideo && (
+              <Alert
+                style={{ marginBottom: 8 }}
+                type={badCaption ? 'error' : 'info'}
+                showIcon
+                message={badCaption
+                  ? <>Caption của video "{badCaption.name}" đang có lỗi, sửa ở <a href="#videos">Kho video</a>.</>
+                  : V > 0
+                    ? <>{V - noCaption.length}/{V} video có caption riêng, nhập ở <a href="#videos">Kho video</a>.</>
+                    : <>Mỗi video dùng caption nhập ở <a href="#videos">Kho video</a>.</>}
+              />
+            )}
+            {showCaptionBox && (
+              <CaptionTemplates
+                template={values.captionTemplate}
+                onPick={(t) => form.setFieldValue('captionTemplate', t)}
+              />
+            )}
+            <Form.Item
+              label={captionFromVideo ? `Caption cho ${V ? `${noCaption.length} ` : ''}video chưa có caption` : undefined}
+              name="captionTemplate"
+              hidden={!showCaptionBox}
+              style={{ marginBottom: 8 }}
+            >
               <Input.TextArea rows={5} placeholder="Nhập caption, ví dụ: {Hay quá|Xem ngay} {filename} #reels" />
             </Form.Item>
-            <CaptionHelper
-              template={values.captionTemplate}
-              onInsert={(snippet) => {
-                const cur = form.getFieldValue('captionTemplate') || '';
-                form.setFieldValue('captionTemplate', cur + (cur && !cur.endsWith('\n') && !cur.endsWith(' ') ? ' ' : '') + snippet);
-              }}
-              sampleVideo={videos[0]?.name}
-              samplePages={enabledPages.filter((p) => pageIds.includes(p.id)).map((p) => p.name)}
-            />
+            {showCaptionBox && (
+              <CaptionHelper
+                template={values.captionTemplate}
+                onInsert={(snippet) => {
+                  const cur = form.getFieldValue('captionTemplate') || '';
+                  form.setFieldValue('captionTemplate', cur + (cur && !cur.endsWith('\n') && !cur.endsWith(' ') ? ' ' : '') + snippet);
+                }}
+                sampleVideo={noCaption[0]?.name}
+                samplePages={enabledPages.filter((p) => pageIds.includes(p.id)).map((p) => p.name)}
+              />
+            )}
 
             {V > 0 && P > 0 && slotTimes.length > 0 && (
               <Alert
